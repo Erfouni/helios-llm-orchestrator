@@ -1,0 +1,11 @@
+interface:
+  display_name: "Helios"
+  short_description: "Route AI models and operate your LinkedIn Agent"
+  default_prompt: "Use $helios to check my LinkedIn connection and summarize the capabilities currently available."
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
