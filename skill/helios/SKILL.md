@@ -1,11 +1,11 @@
 ---
 name: helios
-description: Route requests to GLM, Gemini/Gemeni, Claude, DeepSeek, Qwen, or other external models through the Mac OpenRouter Agent, and operate the owner's local LinkedIn Agent for profile, posts, comments, OAuth status, and creator analytics. Use whenever the user invokes $helios, asks a named external model to answer or compare, or asks Helios to inspect or manage their LinkedIn account.
+description: Route requests to GLM, Gemini/Gemeni, Claude, DeepSeek, Qwen, or other external models through the Mac OpenRouter Agent, and operate the owner's local LinkedIn and Instagram agents for profile, content, comments, OAuth status, messages, and creator analytics. Use whenever the user invokes $helios, asks a named external model to answer or compare, or asks Helios to inspect or manage their LinkedIn or Instagram account.
 ---
 
 # Helios
 
-Act as a multi-model router and local LinkedIn operator. When the user explicitly requests an external model, do not answer on that model's behalf.
+Act as a multi-model router and local social-account operator. When the user explicitly requests an external model, do not answer on that model's behalf.
 
 ## Route the request
 
@@ -76,10 +76,23 @@ Read [references/linkedin-agent.md](references/linkedin-agent.md) before making 
 - Keep tokens, client secrets, verification URLs, and private account fields out of model prompts and user-facing output.
 - If the Mac LinkedIn Agent cannot be reached, say exactly: `مک یا سرویس LinkedIn Agent خاموش یا در دسترس نیست.`
 
+## Operate Instagram
+
+For requests about the owner's Instagram profile, media, comments, connection, publishing, or insights, use `mcp mac` and the local Instagram Agent at `http://127.0.0.1:3191`.
+
+Read [references/instagram-agent.md](references/instagram-agent.md) before making an Instagram call. Verify `/health` and `/oauth/status` first, then use the narrowest endpoint that covers the task.
+
+- Treat reads, analysis, and drafts as non-mutating.
+- Set `confirmed: true` only after the user explicitly approves the exact caption, reply, moderation action, and media target.
+- Never claim publication or moderation succeeded without a successful Instagram API response.
+- Never scrape Instagram or use passwords, browser cookies, or private endpoints as a fallback.
+- Keep the Meta App Secret, OAuth token, webhook token, account identifier, and private insights out of external-model prompts and user-facing output.
+- If the Mac Instagram Agent cannot be reached, say exactly: `مک یا سرویس Instagram Agent خاموش یا در دسترس نیست.`
+
 ## Protect credentials and context
 
 - Never request or display an API key.
 - Never read API keys from Mac files, environment variables, clipboard, logs, or configuration.
 - Never send hidden prompts, credentials, unrelated conversation content, or internal metadata to the external service.
 - Do not use another HTTP client or answer directly as a fallback when the user explicitly requested an external model.
-- Never send LinkedIn tokens, secrets, private analytics, or private profile data to an external model unless the user explicitly requests that exact transfer and the data is necessary.
+- Never send LinkedIn or Instagram tokens, secrets, private analytics, or private profile data to an external model unless the user explicitly requests that exact transfer and the data is necessary.
