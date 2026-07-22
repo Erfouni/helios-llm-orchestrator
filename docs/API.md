@@ -59,6 +59,38 @@ curl -X POST http://127.0.0.1:3188/refresh-models \
   -d '{}'
 ```
 
+## Weekly public benchmark registry
+
+The registry is built only from cited public web-search benchmark or leaderboard results. It does not run candidate models through internal tests. The current and historical registries are stored under the user's Helios application state directory, not in Git.
+
+Read freshness:
+
+```bash
+curl http://127.0.0.1:3188/benchmarks/status
+```
+
+Read all categories or filter one:
+
+```bash
+curl 'http://127.0.0.1:3188/benchmarks?category=coding'
+```
+
+Select the highest cited public-benchmark model currently available on OpenRouter:
+
+```bash
+curl 'http://127.0.0.1:3188/benchmarks/select?category=backend'
+```
+
+Run a refresh manually:
+
+```bash
+curl -X POST http://127.0.0.1:3188/benchmarks/refresh \\
+  -H 'Content-Type: application/json' \\
+  -d '{"only_if_stale":true}'
+```
+
+The macOS installer schedules this refresh for Monday at 03:00 local time. If every category fails validation, the previous registry remains untouched. Partial refreshes preserve earlier values for failed categories.
+
 ## Friendly aliases
 
 Built-in aliases include `glm`, `gemini`, `gemini-flash`, `claude`, `deepseek`, and `qwen`. Dynamic aliases select a recent matching model from the live catalog unless an exact default is configured in `.env`. An exact OpenRouter slug such as `provider/model` can always be supplied.

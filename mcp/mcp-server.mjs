@@ -45,10 +45,10 @@ function errorResult(error) {
 }
 
 const server = new McpServer(
-  { name: "helios-multimodel-router", version: "1.0.0" },
+  { name: "helios-multimodel-router", version: "1.1.0" },
   {
     instructions:
-      "When the user explicitly asks to use GLM, Gemini, Claude, DeepSeek, Qwen, or another external model, call openrouter_run_model. When the user asks to compare models, call openrouter_compare_models. Include the complete relevant task or conversation context in prompt. Never claim a model was used unless model_used confirms it. Never request, read, or reveal the OpenRouter API key. External models propose content only; file writes and deletes remain separate actions requiring preview and confirmation.",
+      "When the user explicitly asks to use GLM, Gemini, Claude, DeepSeek, Qwen, or another external model, call openrouter_run_model. When the user asks to compare models, call openrouter_compare_models. For task-specific model selection, query the weekly public benchmark registry with helios_select_benchmark_model. Include the complete relevant task or conversation context in prompt. Never claim a model was used unless model_used confirms it. Never request, read, or reveal the OpenRouter API key. External models propose content only; file writes and deletes remain separate actions requiring preview and confirmation.",
   },
 );
 
@@ -145,6 +145,74 @@ server.registerTool(
       return result(await localJson("/compare", {
         method: "POST",
         body: JSON.stringify(args),
+      }));
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "helios_get_benchmark_registry",
+  {
+    title: "Get Helios benchmark registry",
+    description:
+      "Read the latest weekly web-only public benchmark registry. Optionally filter by task category. Results include the public source URL and registry freshness.",
+    inputSchema: {
+      category: z.string().optional().describe("Optional task category such as coding, OCR, vision, or web_research"),
+    },
+    outputSchema: z.record(z.string(), z.unknown()),
+    annotations: { readOnlyHint: true },
+  },
+  async ({ category }) => {
+    try {
+      const query = category ? "?" + new URLSearchParams({ category }).toString() : "";
+      return result(await localJson("/benchmarks" + query));
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "helios_select_benchmark_model",
+  {
+    title: "Select model from weekly public benchmarks",
+    description:
+      "Select the highest-ranked cited public-benchmark model currently available on OpenRouter for a task category. Does not run model tests.",
+    inputSchema: {
+      category: z.string().min(1).describe("Task category or configured alias, for example backend, coding, OCR, vision, or research"),
+    },
+    outputSchema: z.record(z.string(), z.unknown()),
+    annotations: { readOnlyHint: true },
+  },
+  async ({ category }) => {
+    try {
+      const query = new URLSearchParams({ category });
+      return result(await localJson("/benchmarks/select?" + query.toString()));
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+);
+
+server.registerTool(
+  "helios_refresh_benchmarks",
+  {
+    title: "Refresh Helios public benchmark registry",
+    description:
+      "Run the configured web-only benchmark searches and publish a versioned weekly registry. This incurs OpenRouter web-search and model-token costs; call only on explicit request.",
+    inputSchema: {
+      only_if_stale: z.boolean().optional().default(true),
+    },
+    outputSchema: z.record(z.string(), z.unknown()),
+    annotations: { readOnlyHint: false, idempotentHint: true },
+  },
+  async ({ only_if_stale = true }) => {
+    try {
+      return result(await localJson("/benchmarks/refresh", {
+        method: "POST",
+        body: JSON.stringify({ only_if_stale }),
       }));
     } catch (error) {
       return errorResult(error);

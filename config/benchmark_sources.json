@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "selection_policy": "public_web_benchmark_only",
+  "search_model": "openrouter/auto",
+  "search_engine": "exa",
+  "max_results": 8,
+  "max_output_tokens": 2500,
+  "max_parallel": 3,
+  "valid_days": 8,
+  "exclude_domains": [
+    "reddit.com",
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "tiktok.com"
+  ],
+  "task_aliases": {
+    "analysis": "reasoning",
+    "planning": "reasoning",
+    "product": "reasoning",
+    "backend": "coding",
+    "software_engineering": "coding",
+    "frontend_development": "frontend",
+    "tool_use": "agentic_tool_use",
+    "research": "web_research",
+    "picture_analysis": "vision",
+    "image_analysis": "vision",
+    "text_generation": "reasoning",
+    "diagram_generation": "image_generation"
+  },
+  "categories": {
+    "reasoning": {
+      "query": "latest public frontier AI reasoning model benchmark leaderboard",
+      "benchmark_hints": ["GPQA Diamond", "ARC-AGI-2", "Humanity's Last Exam"]
+    },
+    "coding": {
+      "query": "latest public coding and software engineering AI model benchmark leaderboard",
+      "benchmark_hints": ["SWE-bench Verified", "LiveCodeBench"]
+    },
+    "frontend": {
+      "query": "latest public frontend and web development AI model benchmark leaderboard",
+      "benchmark_hints": ["WebDev Arena", "Design2Code"]
+    },
+    "agentic_tool_use": {
+      "query": "latest public AI agent tool-use benchmark leaderboard",
+      "benchmark_hints": ["BFCL", "TAU-bench", "ToolBench"]
+    },
+    "web_research": {
+      "query": "latest public AI web research and deep research benchmark leaderboard",
+      "benchmark_hints": ["BrowseComp", "DeepResearch Bench", "GAIA"]
+    },
+    "long_context": {
+      "query": "latest public long-context language model benchmark leaderboard",
+      "benchmark_hints": ["LongBench v2", "RULER"]
+    },
+    "mathematics": {
+      "query": "latest public mathematics reasoning AI model benchmark leaderboard",
+      "benchmark_hints": ["AIME", "MATH-500"]
+    },
+    "vision": {
+      "query": "latest public multimodal image understanding model benchmark leaderboard",
+      "benchmark_hints": ["MMMU-Pro", "MMBench"]
+    },
+    "ocr": {
+      "query": "latest public OCR vision-language model benchmark leaderboard",
+      "benchmark_hints": ["OCRBench v2", "OCRBench"]
+    },
+    "image_generation": {
+      "query": "latest public text-to-image generation model leaderboard",
+      "benchmark_hints": ["Artificial Analysis Image Arena", "GenAI-Bench"]
+    },
+    "video_generation": {
+      "query": "latest public AI text-to-video generation model leaderboard",
+      "benchmark_hints": ["Artificial Analysis Video Arena", "VBench"]
+    },
+    "multilingual": {
+      "query": "latest public multilingual language model benchmark leaderboard including Persian",
+      "benchmark_hints": ["Global-MMLU", "MMLU-ProX", "Persian language benchmark"]
+    }
+  }
+}
