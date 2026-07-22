@@ -52,7 +52,7 @@ curl -X POST http://127.0.0.1:3188/refresh-models \
 
 ## Public benchmark registry
 
-The registry uses cited public web evidence only. It rejects blocked aggregators, display-only or estimated tables, and rankings with fewer than three distinct comparable models.
+The registry uses cited public web evidence only. Every category has an explicit official/primary-source domain allowlist. It rejects all other domains, blocked aggregators, display-only or estimated tables, and rankings with fewer than three distinct comparable models.
 
 ```bash
 curl http://127.0.0.1:3188/benchmarks/status

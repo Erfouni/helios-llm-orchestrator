@@ -94,7 +94,7 @@ Those durable features are the scope of [Helios V2](docs/HELIOS_V2_TECHNICAL_SPE
 
 Helios performs **web search only** for registry updates; it does not run private benchmark tests. Evidence must:
 
-- come from an official leaderboard, benchmark site, or primary paper;
+- come from a per-category allowlist of official leaderboards, benchmark sites, or primary papers;
 - provide one comparable ranking with at least three distinct models;
 - include citation URLs returned by web search;
 - avoid display-only tables, aggregators, estimates, and fabricated/composite scores.

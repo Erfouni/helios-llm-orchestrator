@@ -39,13 +39,13 @@ class BenchmarkRegistryTests(unittest.TestCase):
                                 "benchmark_date": "2026-07-20",
                                 "selected_score": 80.0,
                                 "selected_score_text": "80.0%",
-                                "selection_source_url": "https://example.com/leaderboard",
+                                "selection_source_url": "https://www.swebench.com/",
                                 "selection_policy": "highest_cited_public_rank_available_on_openrouter",
                                 "valid_until": "2099-07-30T00:00:00Z",
                                 "ranking": [
-                                    {"model_name": "Model A", "source_url": "https://example.com/leaderboard"},
-                                    {"model_name": "Model B", "source_url": "https://example.com/leaderboard"},
-                                    {"model_name": "Model C", "source_url": "https://example.com/leaderboard"},
+                                    {"model_name": "Model A", "source_url": "https://www.swebench.com/"},
+                                    {"model_name": "Model B", "source_url": "https://www.swebench.com/"},
+                                    {"model_name": "Model C", "source_url": "https://www.swebench.com/"},
                                 ],
                             }
                         },
@@ -111,6 +111,38 @@ class BenchmarkRegistryTests(unittest.TestCase):
             with self.assertRaises(benchmark_registry.BenchmarkRegistryError) as error:
                 benchmark_registry.select_benchmark_model("coding", path)
             self.assertEqual(error.exception.status, 422)
+
+    def test_non_allowlisted_source_is_not_selectable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "registry.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "valid_until": "2099-01-01T00:00:00Z",
+                        "categories": {
+                            "coding": {
+                                "selected_model": {"id": "provider/model"},
+                                "ranking": [
+                                    {
+                                        "model_name": f"Model {number}",
+                                        "source_url": "https://llm-stats.example/leaderboard",
+                                    }
+                                    for number in range(1, 4)
+                                ],
+                            }
+                        },
+                        "failures": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            status = benchmark_registry.registry_status(path)
+            self.assertTrue(status["stale"])
+            self.assertEqual(status["low_quality_categories"], ["coding"])
+            with self.assertRaises(benchmark_registry.BenchmarkRegistryError) as error:
+                benchmark_registry.select_benchmark_model("coding", path)
+            self.assertEqual(error.exception.status, 422)
+            self.assertIn("allowlist", error.exception.details["reason"])
 
     def test_refresh_quality_gate_and_top_public_model_semantics(self):
         source = "https://official.example/leaderboard"

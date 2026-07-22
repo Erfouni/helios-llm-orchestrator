@@ -146,11 +146,17 @@ def _category_valid_until(result: dict[str, Any], registry: dict[str, Any]) -> A
 
 
 def _result_quality_error(
-    result: dict[str, Any], config: dict[str, Any] | None = None
+    category: str, result: dict[str, Any], config: dict[str, Any] | None = None
 ) -> str | None:
     config = config or load_config()
     minimum = max(2, min(int(config.get("min_ranked_models", 3)), 5))
     blocked = {str(item).lower() for item in config.get("exclude_domains", [])}
+    spec = config.get("categories", {}).get(category, {})
+    allowed = {
+        str(item).lower()
+        for item in spec.get("allowed_domains", [])
+        if isinstance(item, str)
+    }
     ranking = result.get("ranking")
     if not isinstance(ranking, list):
         return "ranking is missing"
@@ -165,6 +171,10 @@ def _result_quality_error(
         hostname = (urllib.parse.urlsplit(url).hostname or "").lower()
         if any(hostname == domain or hostname.endswith("." + domain) for domain in blocked):
             return "ranking uses a blocked or aggregator source"
+        if allowed and not any(
+            hostname == domain or hostname.endswith("." + domain) for domain in allowed
+        ):
+            return "ranking source is not on the category primary-source allowlist"
         names.add(name)
     if len(names) < minimum:
         return f"ranking contains fewer than {minimum} distinct cited models"
@@ -183,7 +193,10 @@ def registry_status(path: Path = REGISTRY_PATH) -> dict[str, Any]:
         category
         for category, result in registry.get("categories", {}).items()
         if not isinstance(result, dict)
-        or (config is not None and _result_quality_error(result, config) is not None)
+        or (
+            config is not None
+            and _result_quality_error(category, result, config) is not None
+        )
     )
     stale_categories = sorted(
         category
@@ -325,13 +338,23 @@ def _canonical_url(value: str) -> str:
     )
 
 
-def _safe_source_url(value: Any, citations: set[str], blocked_domains: set[str]) -> str | None:
+def _safe_source_url(
+    value: Any,
+    citations: set[str],
+    blocked_domains: set[str],
+    allowed_domains: set[str] | None = None,
+) -> str | None:
     if not isinstance(value, str) or not value.startswith(("http://", "https://")):
         return None
     canonical = _canonical_url(value)
     parsed = urllib.parse.urlsplit(canonical)
     hostname = (parsed.hostname or "").lower()
     if any(hostname == domain or hostname.endswith("." + domain) for domain in blocked_domains):
+        return None
+    if allowed_domains and not any(
+        hostname == domain or hostname.endswith("." + domain)
+        for domain in allowed_domains
+    ):
         return None
     if canonical not in citations:
         return None
@@ -342,12 +365,14 @@ def _build_prompt(
     category: str, spec: dict[str, Any], today: str, min_ranked_models: int
 ) -> str:
     benchmark_hints = ", ".join(str(item) for item in spec.get("benchmark_hints", []))
+    allowed_domains = ", ".join(str(item) for item in spec.get("allowed_domains", []))
     return f"""Today is {today}. Perform web search only; do not run or simulate any model tests.
 
 Find the latest publicly reported leaderboard or benchmark results for this task category:
 Category: {category}
 Search objective: {spec.get('query', '')}
 Preferred benchmark names: {benchmark_hints or 'use the most relevant recognized public benchmark'}
+Approved primary-source domains: {allowed_domains or 'none configured'}
 
 Return JSON only with this exact shape:
 {{
@@ -371,6 +396,7 @@ Rules:
 - Use only web-grounded public benchmark or leaderboard evidence.
 - Use an official benchmark site, official leaderboard, or primary paper. Do not use
   an aggregator, marketing summary, display-only table, estimate, or composite ranking.
+- Every source URL must be on the approved primary-source domain list above.
 - Return between {min_ranked_models} and five distinct models from one comparable
   leaderboard and preserve the source's ranking.
 - Every ranked item must contain an exact source URL provided by web search.
@@ -392,8 +418,13 @@ def _refresh_category(
         "engine": str(config.get("search_engine", "exa")),
         "max_results": int(config.get("max_results", 8)),
     }
+    allowed = spec.get("allowed_domains")
+    if isinstance(allowed, list) and allowed:
+        plugin["allowed_domains"] = [str(item) for item in allowed]
+    else:
+        allowed = []
     excluded = config.get("exclude_domains")
-    if isinstance(excluded, list) and excluded:
+    if not allowed and isinstance(excluded, list) and excluded:
         plugin["exclude_domains"] = [str(item) for item in excluded]
 
     payload = {
@@ -461,6 +492,7 @@ def _refresh_category(
         extracted = _extract_json(repair_message.get("content"))
     citations = _citation_urls(message)
     blocked_domains = {str(item).lower() for item in config.get("exclude_domains", [])}
+    allowed_domains = {str(item).lower() for item in allowed}
 
     ranking: list[dict[str, Any]] = []
     seen_models: set[str] = set()
@@ -468,7 +500,9 @@ def _refresh_category(
         if not isinstance(raw, dict):
             continue
         model_name = str(raw.get("model_name", "")).strip()
-        source_url = _safe_source_url(raw.get("source_url"), citations, blocked_domains)
+        source_url = _safe_source_url(
+            raw.get("source_url"), citations, blocked_domains, allowed_domains
+        )
         model_key = _normalize(model_name)
         if not model_name or not source_url or not model_key or model_key in seen_models:
             continue
@@ -524,6 +558,7 @@ def _refresh_category(
             "passed": True,
             "minimum_ranked_models": minimum,
             "primary_source_required": True,
+            "allowed_domains": sorted(allowed_domains),
         },
         "ranking": ranking,
         "notes": str(extracted.get("notes", ""))[:1000],
@@ -695,7 +730,7 @@ def select_benchmark_model(category: str, path: Path = REGISTRY_PATH) -> dict[st
             {"category": view["category"], "valid_until": view["valid_until"]},
         )
     result = view["result"]
-    quality_error = _result_quality_error(result)
+    quality_error = _result_quality_error(view["category"], result)
     if quality_error:
         raise BenchmarkRegistryError(
             "Benchmark evidence for this category does not pass current quality gates",
