@@ -1,21 +1,25 @@
 {
-  "name": "helios-multimodel-router",
-  "version": "1.0.0",
+  "name": "helios-llm-orchestrator",
+  "version": "1.2.0",
   "private": true,
-  "description": "Loopback-only OpenRouter gateway and MCP server for routing tasks to multiple AI models.",
+  "description": "Local-first MCP multi-LLM orchestrator with task decomposition and benchmark-guided OpenRouter routing.",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "mcp:start": "node mcp/mcp-server.mjs",
-    "check": "node --check mcp/mcp-server.mjs && python3 -m py_compile agent/server.py agent/benchmark_registry.py scripts/refresh-benchmarks.py",
-    "test": "npm run check && python3 -m unittest discover -s tests -p 'test_*.py'",
-    "scan:secrets": "bash scripts/scan-secrets.sh"
+    "check": "node --check mcp/mcp-server.mjs && node --check scripts/scan-secrets.mjs && node --check scripts/run-python.mjs && node scripts/run-python.mjs -m py_compile agent/server.py agent/benchmark_registry.py scripts/refresh-benchmarks.py",
+    "test": "npm run check && node scripts/run-python.mjs -m unittest discover -s tests -p test_*.py",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
+  },
+  "overrides": {
+    "@hono/node-server": "^2.0.5"
   }
 }

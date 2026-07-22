@@ -6,8 +6,9 @@
   <string>com.local.helios-benchmark-refresh</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>__PROJECT_ROOT__/scripts/run-benchmark-refresh.sh</string>
+    <string>__PYTHON_BIN__</string>
+    <string>__PROJECT_ROOT__/scripts/refresh-benchmarks.py</string>
+    <string>--if-stale</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__PROJECT_ROOT__</string>

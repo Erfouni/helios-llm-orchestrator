@@ -1,7 +1,7 @@
 interface:
   display_name: "Helios"
-  short_description: "Route AI models and operate LinkedIn and Instagram"
-  default_prompt: "Use $helios to check my social agents and summarize the capabilities currently available."
+  short_description: "Route models and run reviewed AI projects"
+  default_prompt: "Use $helios to plan a complex project, show the reviewed task graph, and wait for my approval before execution."
 policy:
   products:
   - chatgpt

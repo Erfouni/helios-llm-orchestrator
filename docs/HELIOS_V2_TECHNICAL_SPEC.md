@@ -6,7 +6,9 @@ Target service: Mac OpenRouter Agent on `127.0.0.1:3188`
 
 ## 1. Executive decision
 
-Helios V2 will evolve the current OpenRouter gateway into a durable big-project orchestrator while preserving every V1 endpoint and its existing behavior.
+ChatGPT/Codex already orchestrates big projects with Helios in the active host session: it decomposes the brief, maintains the task DAG, selects a benchmark-guided specialist for each task, reviews outputs, and integrates accepted results.
+
+Helios V2 will move that working host-orchestrated workflow into a durable local engine while preserving every current endpoint and its existing behavior.
 
 The first release will be a local-first MVP using Python, SQLite, filesystem artifacts, and bounded background workers. PostgreSQL/object storage and a durable workflow engine are deferred until the orchestration contract is proven with a real industrial project.
 
@@ -23,6 +25,10 @@ The dark-factory horizontal glass buffer project will be the reference acceptanc
 - Parallel model comparison through `POST /compare`, limited to four models.
 - MCP wrapper exposing model list, run, and compare tools.
 - Basic request-size, prompt-size, output-token, and timeout limits.
+- Weekly web-only public benchmark registry with citations, quality gates, per-category freshness, and OpenRouter availability matching.
+- Benchmark lookup, selection, and refresh tools exposed through MCP.
+- ChatGPT/Codex host orchestration with project decomposition, session-scoped task DAGs, parallel ready-task execution, independent review, and integration.
+- Automated Python, JavaScript syntax, secret-scanning, and dependency-audit checks.
 - API key loaded locally and not returned by endpoints.
 
 ### Confirmed operational status
@@ -32,20 +38,15 @@ The dark-factory horizontal glass buffer project will be the reference acceptanc
 - Four-model parallel execution succeeds.
 - Kimi K3, Claude Sonnet 5, GLM 5.2, and DeepSeek V4 Pro were successfully exercised on the reference project.
 
-### Gaps blocking big-project orchestration
+### Gaps addressed by durable V2
 
-- No Project, Workstream, Task, Dependency, Gate, Artifact, Decision, or Risk entities.
+- No persistent Project, Workstream, Task, Dependency, Gate, Artifact, Decision, or Risk entities in the local service.
 - No persistent project state; process restart loses all orchestration state.
-- No task DAG or critical-path validation.
-- No planner-executor-verifier loop.
-- No automatic model/tool selection by capability, quality, cost, or latency.
 - No structured output contract or schema validation for model answers.
-- No independent verification or contradiction resolution.
-- No pause, resume, cancel, retry policy, idempotency, or checkpoint recovery.
+- No durable pause, resume, cancel, retry policy, idempotency, or checkpoint recovery.
 - No project budget, token ceiling, per-task timeout, or cost roll-up.
 - No versioned artifact registry.
-- No automated unit/integration tests in the package script.
-- The active runtime directory is not currently a Git repository.
+- No persistent contradiction-resolution history or cross-session audit log.
 
 ## 3. Goals and non-goals
 
@@ -159,7 +160,8 @@ Each model/tool record must contain:
 - Supported reasoning/tool/structured-output parameters.
 - Input, output, search, and image pricing.
 - Measured latency and success rate.
-- Internal benchmark scores by task category.
+- Cited public benchmark evidence by task category, including source URL, registry hash, and per-category freshness.
+- Optional locally measured operational telemetry, clearly labeled and never presented as a public benchmark.
 - Reliability flags and known failure patterns.
 - Last validation date.
 

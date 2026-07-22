@@ -7,7 +7,9 @@
   "max_output_tokens": 2500,
   "max_parallel": 3,
   "valid_days": 8,
+  "min_ranked_models": 3,
   "exclude_domains": [
+    "benchlm.ai",
     "reddit.com",
     "x.com",
     "twitter.com",

@@ -6,8 +6,8 @@
   <string>com.local.helios-multimodel-router</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/zsh</string>
-    <string>__PROJECT_ROOT__/scripts/start-agent.sh</string>
+    <string>__PYTHON_BIN__</string>
+    <string>__PROJECT_ROOT__/agent/server.py</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__PROJECT_ROOT__</string>
