@@ -17,8 +17,8 @@
 - کلید OpenRouter
 
 ```bash
-git clone git@github.com:mesutfd/helios-multimodel-router.git
-cd helios-multimodel-router
+git clone https://github.com/Erfouni/helios-llm-orchestrator.git
+cd helios-llm-orchestrator
 chmod +x scripts/*.sh
 ./scripts/install-macos.sh
 ```
