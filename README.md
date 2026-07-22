@@ -93,8 +93,8 @@ That orchestration layer is documented as an implementation roadmap; it is not p
 Requirements: macOS, Python 3.10+, Node.js 22+, npm, and an OpenRouter API key.
 
 ```bash
-git clone https://github.com/Erfouni/helios-multimodel-router.git
-cd helios-multimodel-router
+git clone https://github.com/Erfouni/helios-llm-orchestrator.git
+cd helios-llm-orchestrator
 ./scripts/install-macos.sh
 ```
 
