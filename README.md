@@ -181,9 +181,12 @@ Run the complete verification suite:
 ```bash
 npm ci
 npm test
+npm run audit:high
 npm run scan:secrets
 npm run audit:prod
 ```
+
+The dependency audit fails CI for high- and critical-severity findings. Moderate findings are still printed for review instead of being hidden.
 
 See [Security Policy](SECURITY.md).
 
