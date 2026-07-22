@@ -1,5 +1,5 @@
 {
-  "name": "helios-multimodel-router",
+  "name": "helios-llm-orchestrator",
   "version": "1.0.0",
   "private": true,
   "description": "Loopback-only OpenRouter gateway and MCP server for routing tasks to multiple AI models.",
@@ -10,7 +10,8 @@
   "scripts": {
     "mcp:start": "node mcp/mcp-server.mjs",
     "check": "node --check mcp/mcp-server.mjs && python3 -m py_compile agent/server.py agent/benchmark_registry.py scripts/refresh-benchmarks.py",
-    "test": "npm run check && python3 -m unittest discover -s tests -p 'test_*.py'",
+    "test": "npm run check && python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "audit:high": "npm audit --omit=dev --audit-level=high",
     "scan:secrets": "bash scripts/scan-secrets.sh"
   },
   "license": "MIT",
