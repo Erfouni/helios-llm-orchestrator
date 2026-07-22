@@ -1,26 +1,17 @@
 # HTTP API
 
-Base URL: `http://127.0.0.1:3188`
+Base URL: `http://127.0.0.1:3188`. All responses are JSON.
 
-All responses are JSON. If `HELIOS_LOCAL_API_KEY` is configured, send:
+If `HELIOS_LOCAL_API_KEY` is configured, add `Authorization: Bearer <local-secret>` to every endpoint except `/health`. The health response never exposes credentials.
 
-```http
-Authorization: Bearer <local-secret>
-```
-
-The `/health` endpoint remains available without authentication and never exposes a credential.
-
-## Health
+## Health and catalog
 
 ```bash
 curl http://127.0.0.1:3188/health
-```
-
-## Search models
-
-```bash
 curl 'http://127.0.0.1:3188/models?search=gemini&limit=10'
 ```
+
+`limit` must be an integer from 1 to 200.
 
 ## Run one model
 
@@ -35,7 +26,7 @@ curl -X POST http://127.0.0.1:3188/run \
   }'
 ```
 
-The response includes `model_requested`, `model_resolved`, and `model_used`. Treat `model_used` as the confirmed provider response.
+You may provide a non-empty OpenRouter-compatible `messages` array instead of `prompt`. Roles, content, total serialized size, token count, temperature, and top-p are validated. The response’s `model_used` is the provider-confirmed model.
 
 ## Compare models
 
@@ -49,9 +40,9 @@ curl -X POST http://127.0.0.1:3188/compare \
   }'
 ```
 
-Two to four models are supported per request.
+Two to four distinct non-empty models are supported. Run, compare, and benchmark-refresh requests share a bounded paid-request concurrency limit.
 
-## Refresh catalog
+## Refresh the model catalog
 
 ```bash
 curl -X POST http://127.0.0.1:3188/refresh-models \
@@ -59,38 +50,32 @@ curl -X POST http://127.0.0.1:3188/refresh-models \
   -d '{}'
 ```
 
-## Weekly public benchmark registry
+## Public benchmark registry
 
-The registry is built only from cited public web-search benchmark or leaderboard results. It does not run candidate models through internal tests. The current and historical registries are stored under the user's Helios application state directory, not in Git.
-
-Read freshness:
+The registry uses cited public web evidence only. It rejects blocked aggregators, display-only or estimated tables, and rankings with fewer than three distinct comparable models.
 
 ```bash
 curl http://127.0.0.1:3188/benchmarks/status
-```
-
-Read all categories or filter one:
-
-```bash
 curl 'http://127.0.0.1:3188/benchmarks?category=coding'
+curl 'http://127.0.0.1:3188/benchmarks/select?category=Backend'
 ```
 
-Select the highest cited public-benchmark model currently available on OpenRouter:
+Category names and aliases are normalized case-insensitively. Selection fails when that category’s evidence is stale, insufficient, or has no eligible OpenRouter model.
+
+Manual stale-only refresh:
 
 ```bash
-curl 'http://127.0.0.1:3188/benchmarks/select?category=backend'
-```
-
-Run a refresh manually:
-
-```bash
-curl -X POST http://127.0.0.1:3188/benchmarks/refresh \\
-  -H 'Content-Type: application/json' \\
+curl -X POST http://127.0.0.1:3188/benchmarks/refresh \
+  -H 'Content-Type: application/json' \
   -d '{"only_if_stale":true}'
 ```
 
-The macOS installer schedules this refresh for Monday at 03:00 local time. If every category fails validation, the previous registry remains untouched. Partial refreshes preserve earlier values for failed categories.
+The installer schedules the same operation for Monday at 03:00 local time. Each category has its own `valid_until`; a partial refresh cannot make preserved old evidence appear fresh. If every category fails validation, the published registry remains untouched.
 
 ## Friendly aliases
 
-Built-in aliases include `glm`, `gemini`, `gemini-flash`, `claude`, `deepseek`, and `qwen`. Dynamic aliases select a recent matching model from the live catalog unless an exact default is configured in `.env`. An exact OpenRouter slug such as `provider/model` can always be supplied.
+Built-in aliases include `glm`, `gemini`, `gemini-flash`, `claude`, `deepseek`, and `qwen`. Exact OpenRouter slugs such as `provider/model` are also accepted.
+
+## Project orchestration
+
+The current HTTP API intentionally exposes primitives rather than a fake project backend. ChatGPT/Codex creates and tracks the task graph in its active session, calls benchmark selection and `/run` for each task, reviews outputs, and integrates accepted results. Persistent `/v2/projects` endpoints are not implemented yet.

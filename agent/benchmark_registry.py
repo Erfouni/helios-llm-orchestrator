@@ -79,7 +79,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
 
 def empty_registry() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "empty",
         "updated_at": None,
         "valid_until": None,
@@ -128,15 +128,74 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(str(temporary), str(path))
 
 
+def _is_stale(valid_until: Any, now: datetime | None = None) -> bool:
+    if not isinstance(valid_until, str):
+        return True
+    try:
+        return datetime.fromisoformat(valid_until.replace("Z", "+00:00")) <= (now or utc_now())
+    except ValueError:
+        return True
+
+
+def normalize_category(value: str) -> str:
+    return "_".join(re.findall(r"[a-z0-9]+", str(value).strip().lower()))
+
+
+def _category_valid_until(result: dict[str, Any], registry: dict[str, Any]) -> Any:
+    return result.get("valid_until") or registry.get("valid_until")
+
+
+def _result_quality_error(
+    result: dict[str, Any], config: dict[str, Any] | None = None
+) -> str | None:
+    config = config or load_config()
+    minimum = max(2, min(int(config.get("min_ranked_models", 3)), 5))
+    blocked = {str(item).lower() for item in config.get("exclude_domains", [])}
+    ranking = result.get("ranking")
+    if not isinstance(ranking, list):
+        return "ranking is missing"
+    names: set[str] = set()
+    for item in ranking:
+        if not isinstance(item, dict):
+            continue
+        name = _normalize(str(item.get("model_name", "")))
+        url = item.get("source_url")
+        if not name or not isinstance(url, str):
+            continue
+        hostname = (urllib.parse.urlsplit(url).hostname or "").lower()
+        if any(hostname == domain or hostname.endswith("." + domain) for domain in blocked):
+            return "ranking uses a blocked or aggregator source"
+        names.add(name)
+    if len(names) < minimum:
+        return f"ranking contains fewer than {minimum} distinct cited models"
+    return None
+
+
 def registry_status(path: Path = REGISTRY_PATH) -> dict[str, Any]:
     registry = load_registry(path)
     valid_until = registry.get("valid_until")
-    stale = True
-    if isinstance(valid_until, str):
-        try:
-            stale = datetime.fromisoformat(valid_until.replace("Z", "+00:00")) <= utc_now()
-        except ValueError:
-            stale = True
+    now = utc_now()
+    try:
+        config = load_config()
+    except BenchmarkRegistryError:
+        config = None
+    low_quality_categories = sorted(
+        category
+        for category, result in registry.get("categories", {}).items()
+        if not isinstance(result, dict)
+        or (config is not None and _result_quality_error(result, config) is not None)
+    )
+    stale_categories = sorted(
+        category
+        for category, result in registry.get("categories", {}).items()
+        if not isinstance(result, dict)
+        or _is_stale(_category_valid_until(result, registry), now)
+    )
+    stale = (
+        not registry.get("categories")
+        or bool(stale_categories)
+        or bool(low_quality_categories)
+    )
     return {
         "status": registry.get("status", "unknown"),
         "updated_at": registry.get("updated_at"),
@@ -144,6 +203,8 @@ def registry_status(path: Path = REGISTRY_PATH) -> dict[str, Any]:
         "stale": stale,
         "registry_hash": registry.get("registry_hash"),
         "category_count": len(registry.get("categories", {})),
+        "stale_categories": stale_categories,
+        "low_quality_categories": low_quality_categories,
         "failure_count": len(registry.get("failures", [])),
     }
 
@@ -277,14 +338,16 @@ def _safe_source_url(value: Any, citations: set[str], blocked_domains: set[str])
     return canonical
 
 
-def _build_prompt(category: str, spec: dict[str, Any], today: str) -> str:
+def _build_prompt(
+    category: str, spec: dict[str, Any], today: str, min_ranked_models: int
+) -> str:
     benchmark_hints = ", ".join(str(item) for item in spec.get("benchmark_hints", []))
     return f"""Today is {today}. Perform web search only; do not run or simulate any model tests.
 
 Find the latest publicly reported leaderboard or benchmark results for this task category:
 Category: {category}
 Search objective: {spec.get('query', '')}
-Preferred benchmark names: {benchmark_hints or 'use the strongest recognized public benchmark'}
+Preferred benchmark names: {benchmark_hints or 'use the most relevant recognized public benchmark'}
 
 Return JSON only with this exact shape:
 {{
@@ -306,8 +369,10 @@ Return JSON only with this exact shape:
 
 Rules:
 - Use only web-grounded public benchmark or leaderboard evidence.
-- Prefer an official benchmark site, official leaderboard, or primary paper.
-- Return at most five models in the ranking and preserve the source's ranking.
+- Use an official benchmark site, official leaderboard, or primary paper. Do not use
+  an aggregator, marketing summary, display-only table, estimate, or composite ranking.
+- Return between {min_ranked_models} and five distinct models from one comparable
+  leaderboard and preserve the source's ranking.
 - Every ranked item must contain an exact source URL provided by web search.
 - Do not infer, average, estimate, or fabricate a score.
 - If reliable comparable results are unavailable, return an empty ranking.
@@ -338,7 +403,15 @@ def _refresh_category(
                 "role": "system",
                 "content": "You extract current public benchmark rankings from web evidence and output strict JSON.",
             },
-            {"role": "user", "content": _build_prompt(category, spec, today)},
+            {
+                "role": "user",
+                "content": _build_prompt(
+                    category,
+                    spec,
+                    today,
+                    max(2, min(int(config.get("min_ranked_models", 3)), 5)),
+                ),
+            },
         ],
         "plugins": [plugin],
         "response_format": {"type": "json_object"},
@@ -358,12 +431,19 @@ def _refresh_category(
             "messages": [
                 {
                     "role": "system",
-                    "content": "Repair the supplied malformed content into valid JSON only. Preserve every factual value and URL; do not add facts.",
+                    "content": (
+                        "Repair the supplied malformed content into valid JSON only. "
+                        "Preserve every factual value and URL; do not add facts."
+                    ),
                 },
                 {
                     "role": "user",
                     "content": "Convert this response to the exact requested JSON object:\n\n"
-                    + (raw_content if isinstance(raw_content, str) else json.dumps(raw_content, ensure_ascii=False)),
+                    + (
+                        raw_content
+                        if isinstance(raw_content, str)
+                        else json.dumps(raw_content, ensure_ascii=False)
+                    ),
                 },
             ],
             "response_format": {"type": "json_object"},
@@ -371,21 +451,28 @@ def _refresh_category(
             "temperature": 0,
             "stream": False,
         }
-        repaired = openrouter_request("POST", "/chat/completions", repair_payload, timeout=180)
+        repaired = openrouter_request(
+            "POST", "/chat/completions", repair_payload, timeout=180
+        )
         repair_choices = repaired.get("choices") or []
-        repair_message = repair_choices[0].get("message", {}) if repair_choices else {}
+        repair_message = (
+            repair_choices[0].get("message", {}) if repair_choices else {}
+        )
         extracted = _extract_json(repair_message.get("content"))
     citations = _citation_urls(message)
     blocked_domains = {str(item).lower() for item in config.get("exclude_domains", [])}
 
     ranking: list[dict[str, Any]] = []
+    seen_models: set[str] = set()
     for position, raw in enumerate(extracted.get("ranking") or [], start=1):
         if not isinstance(raw, dict):
             continue
         model_name = str(raw.get("model_name", "")).strip()
         source_url = _safe_source_url(raw.get("source_url"), citations, blocked_domains)
-        if not model_name or not source_url:
+        model_key = _normalize(model_name)
+        if not model_name or not source_url or not model_key or model_key in seen_models:
             continue
+        seen_models.add(model_key)
         available = resolve_available_model(model_name, models)
         ranking.append(
             {
@@ -400,30 +487,49 @@ def _refresh_category(
             }
         )
     ranking.sort(key=lambda item: item["rank"])
-    if not ranking:
+    minimum = max(2, min(int(config.get("min_ranked_models", 3)), 5))
+    if len(ranking) < minimum:
         raise BenchmarkRegistryError(
-            "Web search returned no citation-validated public ranking",
+            "Public evidence did not meet the minimum comparable-model quality gate",
             422,
-            {"category": category},
+            {
+                "category": category,
+                "validated_model_count": len(ranking),
+                "minimum_required": minimum,
+            },
         )
     selected = next((item for item in ranking if item["available_on_openrouter"]), None)
-    evidence_item = selected or ranking[0]
+    if not selected:
+        raise BenchmarkRegistryError(
+            "No cited ranked model could be matched to the live OpenRouter catalog",
+            422,
+            {"category": category, "cited_result_count": len(ranking)},
+        )
 
+    refreshed_at = utc_now()
+    valid_days = max(1, min(int(config.get("valid_days", 8)), 31))
     return {
         "category": category,
         "benchmark_name": str(extracted.get("benchmark_name", ""))[:300],
         "benchmark_date": extracted.get("benchmark_date"),
-        "selected_model": selected["openrouter_model"] if selected else None,
-        "selected_rank": selected["rank"] if selected else None,
-        "selected_score": evidence_item["score"],
-        "selected_score_text": evidence_item["score_text"],
-        "selection_source_url": evidence_item["source_url"],
-        "top_public_model": evidence_item["model_name"],
-        "openrouter_match_available": selected is not None,
+        "selected_model": selected["openrouter_model"],
+        "selected_rank": selected["rank"],
+        "selected_score": selected["score"],
+        "selected_score_text": selected["score_text"],
+        "selection_source_url": selected["source_url"],
+        "top_public_model": ranking[0]["model_name"],
+        "openrouter_match_available": True,
+        "evidence_model_count": len(ranking),
+        "quality_gate": {
+            "passed": True,
+            "minimum_ranked_models": minimum,
+            "primary_source_required": True,
+        },
         "ranking": ranking,
         "notes": str(extracted.get("notes", ""))[:1000],
         "selection_policy": "highest_cited_public_rank_available_on_openrouter",
-        "refreshed_at": isoformat(utc_now()),
+        "refreshed_at": isoformat(refreshed_at),
+        "valid_until": isoformat(refreshed_at + timedelta(days=valid_days)),
         "search_model_used": response.get("model"),
         "usage": response.get("usage", {}),
     }
@@ -482,14 +588,45 @@ def refresh_registry(
                 {"failures": failures},
             )
 
-        merged_categories = dict(previous.get("categories", {}))
-        merged_categories.update(refreshed)
         valid_days = max(1, min(int(config.get("valid_days", 8)), 31))
+        previous_valid_until = previous.get("valid_until")
+        merged_categories = {}
+        for name, result in previous.get("categories", {}).items():
+            if isinstance(result, dict):
+                migrated = dict(result)
+                migrated.setdefault("valid_until", previous_valid_until)
+                merged_categories[name] = migrated
+            else:
+                merged_categories[name] = result
+        merged_categories.update(refreshed)
+        category_expiries: list[datetime] = []
+        for result in merged_categories.values():
+            if not isinstance(result, dict):
+                continue
+            expiry = result.get("valid_until")
+            if isinstance(expiry, str):
+                try:
+                    category_expiries.append(
+                        datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+                    )
+                except ValueError:
+                    pass
+        earliest_expiry = (
+            min(category_expiries)
+            if category_expiries
+            else now + timedelta(days=valid_days)
+        )
+        stale_categories = [
+            name
+            for name, result in merged_categories.items()
+            if not isinstance(result, dict)
+            or _is_stale(_category_valid_until(result, previous), now)
+        ]
         value = {
-            "schema_version": 1,
-            "status": "current" if not failures else "partial",
+            "schema_version": 2,
+            "status": "current" if not failures and not stale_categories else "partial",
             "updated_at": isoformat(now),
-            "valid_until": isoformat(now + timedelta(days=valid_days)),
+            "valid_until": isoformat(earliest_expiry),
             "registry_hash": None,
             "selection_policy": "public_web_benchmark_only",
             "categories": merged_categories,
@@ -524,8 +661,12 @@ def registry_view(category: str | None = None, path: Path = REGISTRY_PATH) -> di
     registry = load_registry(path)
     if not category:
         return registry
-    aliases = registry.get("task_aliases", {})
-    canonical = str(aliases.get(category, category))
+    aliases = {
+        normalize_category(str(key)): normalize_category(str(value))
+        for key, value in registry.get("task_aliases", {}).items()
+    }
+    requested_key = normalize_category(category)
+    canonical = aliases.get(requested_key, requested_key)
     value = registry.get("categories", {}).get(canonical)
     if value is None:
         raise BenchmarkRegistryError(
@@ -533,30 +674,37 @@ def registry_view(category: str | None = None, path: Path = REGISTRY_PATH) -> di
             404,
             {"requested": category, "available": sorted(registry.get("categories", {}))},
         )
+    category_valid_until = _category_valid_until(value, registry)
     return {
         "requested_category": category,
         "category": canonical,
         "registry_hash": registry.get("registry_hash"),
         "updated_at": registry.get("updated_at"),
-        "valid_until": registry.get("valid_until"),
+        "valid_until": category_valid_until,
+        "stale": _is_stale(category_valid_until),
         "result": value,
     }
 
 
 def select_benchmark_model(category: str, path: Path = REGISTRY_PATH) -> dict[str, Any]:
     view = registry_view(category, path)
+    if view["stale"]:
+        raise BenchmarkRegistryError(
+            "Benchmark evidence for this category is stale; refresh the registry before selection",
+            503,
+            {"category": view["category"], "valid_until": view["valid_until"]},
+        )
     result = view["result"]
+    quality_error = _result_quality_error(result)
+    if quality_error:
+        raise BenchmarkRegistryError(
+            "Benchmark evidence for this category does not pass current quality gates",
+            422,
+            {"category": view["category"], "reason": quality_error},
+        )
     selected = result.get("selected_model")
     if not isinstance(selected, dict) or not selected.get("id"):
-        raise BenchmarkRegistryError(
-            "The top public benchmark models for this category are not available in the OpenRouter catalog",
-            404,
-            {
-                "category": view["category"],
-                "top_public_model": result.get("top_public_model"),
-                "source_url": result.get("selection_source_url"),
-            },
-        )
+        raise BenchmarkRegistryError("No OpenRouter model is selected for this category", 404)
     return {
         "requested_category": category,
         "category": view["category"],
@@ -570,4 +718,5 @@ def select_benchmark_model(category: str, path: Path = REGISTRY_PATH) -> dict[st
         "registry_hash": view.get("registry_hash"),
         "updated_at": view.get("updated_at"),
         "valid_until": view.get("valid_until"),
+        "stale": False,
     }

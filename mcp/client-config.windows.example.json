@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "helios": {
+      "command": "node",
+      "args": [
+        "C:\\ABSOLUTE\\PATH\\helios-llm-orchestrator\\mcp\\mcp-server.mjs"
+      ],
+      "env": {
+        "HELIOS_AGENT_URL": "http://127.0.0.1:3188"
+      }
+    }
+  }
+}

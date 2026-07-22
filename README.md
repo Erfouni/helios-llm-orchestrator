@@ -2,52 +2,45 @@
 
 > Turn ChatGPT or Codex into the lead orchestrator of a specialist AI team.
 
-Helios is a local-first **multi-LLM orchestrator, MCP server, and OpenRouter gateway**. It connects ChatGPT, Codex, and other MCP clients to multiple AI models, then helps route each task to the model best suited to it instead of forcing one model to do everything.
+Helios is a local-first **multi-LLM orchestrator, MCP server, and OpenRouter gateway**. It lets ChatGPT, Codex, or another MCP client break a complex project into focused tasks, select an evidence-backed specialist for each task, review the results, and integrate the accepted work.
 
-## The goal
+## Project goal
 
-The goal of Helios is to make GPT the lead of a professional, multi-model AI team.
+One model should not have to be the best at everything. Helios makes GPT the lead of a professional multi-model team:
 
-A complex project contains different kinds of work: research, product design, backend engineering, frontend implementation, reasoning, OCR, vision, generation, and review. GPT first decomposes the project brief into small, testable tasks with explicit dependencies and acceptance criteria. Helios then classifies every task and gives the orchestrator one secure interface for assigning it to a specialized model through OpenRouter. A web-sourced benchmark registry is refreshed weekly so each assignment can follow current public evidence rather than a permanently hardcoded model list.
+- a research specialist can handle R&D;
+- a coding specialist can handle backend engineering;
+- a frontend specialist can implement the interface;
+- vision, OCR, math, or generation specialists can handle their own task types;
+- a different model family can independently review important outputs.
 
-For example, a project might use:
+The examples are intentionally not hardcoded. Helios refreshes a cited public benchmark registry weekly and chooses the highest-ranked eligible model currently available through OpenRouter for each category.
 
-| Work type | Illustrative specialist |
-| --- | --- |
-| Web research and R&D | A search-grounded model such as Perplexity |
-| Backend engineering | A leading coding model from the Claude family |
-| Frontend implementation | GLM 5.2 or the current frontend benchmark leader |
-| Math and reasoning | The strongest available reasoning model |
-| Independent review | A different high-performing model family |
+## How a big project runs today
 
-These model names are examples, not fixed assignments. The registry can change the selected model as public leaderboards change and as models become available on OpenRouter.
-
-## Big-project orchestration workflow
-
-This is the target Helios V2 project workflow. It makes project decomposition and per-task specialist assignment the central path:
+The workflow below is current behavior when the Helios skill is used by ChatGPT or Codex. Project state lives in the active host conversation.
 
 ```mermaid
 flowchart TB
     U["Project brief<br/>goals • constraints • deliverables"] --> O["ChatGPT / Codex<br/>Lead orchestrator"]
-    O <-->|"MCP over stdio"| M["Helios MCP server"]
+    O --> P["Decompose into atomic tasks"]
+    P --> D["Reviewed task DAG<br/>dependencies • inputs • acceptance"]
+    D --> Q["Ready-task queue<br/>up to 4 independent tasks"]
+
+    Q --> C["Classify each task<br/>research • coding • frontend<br/>reasoning • vision • generation"]
+    C --> M["Helios MCP server<br/>one selection + run per task"]
     M <-->|"Loopback HTTP"| A["Local Helios agent<br/>127.0.0.1:3188"]
 
-    A --> P["Decompose the project"]
-    P --> T["Atomic task set<br/>R&D • Product • Backend • Frontend<br/>OCR • Vision • Image/Video • Analysis"]
-    T --> D["Validated task DAG<br/>dependencies • inputs • acceptance criteria"]
-    D --> Q["Ready-task queue"]
-    Q --> C["Classify every task<br/>capability • risk • tools"]
-
-    W["Public benchmarks<br/>and leaderboards"] -->|"Weekly web refresh"| B["Versioned benchmark registry"]
-    B -->|"Cited ranking by category"| R["Select the strongest available<br/>specialist for each task"]
-    C --> R
+    W["Official public benchmarks<br/>leaderboards • primary papers"] -->|"Weekly web refresh"| B["Versioned registry<br/>citations • per-category freshness"]
+    B --> R["Highest-ranked eligible<br/>OpenRouter specialist"]
+    A --> R
 
     R --> G["OpenRouter"]
-    G --> E["Parallel specialist execution<br/>confirmed model ID per task"]
-    E --> V["Independent verification<br/>criteria • evidence • tool checks"]
-    V -->|"Revision required"| Q
-    V -->|"Accepted outputs"| I["GPT integrates the task results"]
-    I --> F["Final answer • artifacts<br/>provenance • unresolved risks"]
+    G --> E["Parallel specialist outputs<br/>confirmed model ID + usage"]
+    E --> V{"Acceptance and<br/>independent review"}
+    V -->|"Revise once"| Q
+    V -->|"Accepted"| I["GPT integrates results"]
+    I --> F["Final deliverable<br/>provenance • risks • artifacts"]
 
     classDef client fill:#172554,stroke:#60a5fa,color:#ffffff,stroke-width:2px;
     classDef planning fill:#3b0764,stroke:#c084fc,color:#ffffff,stroke-width:2px;
@@ -57,49 +50,62 @@ flowchart TB
     classDef result fill:#164e63,stroke:#22d3ee,color:#ffffff,stroke-width:2px;
 
     class U,O client;
-    class M,A,P,T,D,Q,C,R planning;
-    class W,B evidence;
+    class P,D,Q,C,M,A planning;
+    class W,B,R evidence;
     class G,E execution;
     class V review;
     class I,F result;
 ```
 
-For a large project, GPT remains the lead orchestrator: it creates the task graph, Helios chooses a task-specific specialist for each ready node, independent tasks run in parallel, and GPT integrates only accepted outputs. Direct and Compare modes remain available for smaller requests.
+### Orchestration sequence
 
-The control path stays local: the MCP server communicates over stdio and the HTTP agent accepts loopback traffic only. A public domain is unnecessary unless a remote client must connect directly over the internet.
+1. GPT defines the objective, requirements, constraints, and observable acceptance criteria.
+2. It decomposes the project into at most 12 atomic tasks and validates an acyclic dependency graph.
+3. It classifies every model task and asks Helios for the matching benchmark-guided specialist.
+4. It shows the reviewed execution plan before paid model calls.
+5. After approval, it runs dependency-ready tasks in parallel batches of up to four.
+6. Material outputs are checked against their acceptance criteria and, where practical, reviewed by a different model family.
+7. GPT integrates only accepted outputs and reports model provenance, usage, unresolved risks, and blocked items.
 
-## How project routing works
+Host-tool tasks—such as browsing, files, terminal commands, GitHub, or media generation—use the real tools available to ChatGPT/Codex. External models do not receive independent tool authority.
 
-1. GPT turns the project objective into atomic tasks with explicit inputs, outputs, dependencies, and acceptance criteria.
-2. Helios validates the task DAG and places dependency-satisfied tasks in the ready queue.
-3. Every ready task is classified by capability, such as web research, coding, frontend, mathematics, OCR, vision, image generation, or video generation.
-4. Helios queries the local benchmark registry separately for each task category.
-5. The strongest cited public-benchmark model currently available through OpenRouter is assigned to that task; independent tasks can run in parallel.
-6. A separate reviewer checks each output against its acceptance criteria and either accepts it or returns it for revision.
-7. GPT integrates the accepted task results into the final project answer and artifacts.
+## Current capability boundary
 
-The benchmark registry uses **public web evidence only**. Helios does not claim to run private benchmark tests. The macOS installer schedules a refresh every Monday at 03:00 local time and keeps versioned history.
+Available now:
 
-## What works today
+- ChatGPT/Codex-led project decomposition and session-scoped task graphs;
+- per-task benchmark-guided specialist selection;
+- parallel model execution, independent review, and final integration;
+- Direct mode for one named model and Compare mode for two to four models;
+- live OpenRouter model discovery;
+- weekly, citation-backed public benchmark discovery with per-category freshness;
+- loopback-only HTTP and MCP-over-stdio access;
+- native startup automation and Monday 03:00 refresh on macOS and Windows.
 
-- Live OpenRouter model discovery.
-- Direct execution by friendly alias or exact OpenRouter model ID.
-- Parallel comparison of two to four models.
-- Weekly, citation-backed public benchmark discovery.
-- Benchmark-based model selection by task category.
-- MCP tools for discovery, execution, comparison, registry lookup, and refresh.
-- Loopback-only local service with credentials stored outside Git.
-- macOS LaunchAgent installation for the service and weekly refresh.
+Not yet durable:
 
-## Helios V2 direction
+- restart recovery and cross-conversation project state;
+- a persistent dependency scheduler;
+- pause/resume, enforced project budgets, durable artifact history, and event logs.
 
-The V2 goal is to extend the current router into a durable big-project orchestrator that can decompose a brief into a task graph, assign specialists, run independent work in parallel, verify outputs with a separate reviewer, preserve project state, and integrate accepted results.
+Those durable features are the scope of [Helios V2](docs/HELIOS_V2_TECHNICAL_SPEC.md). V2 does not replace today’s decomposition workflow; it moves that working host-orchestrated flow into a persistent local engine.
 
-That orchestration layer is documented as an implementation roadmap; it is not presented as a completed feature in the current release. See [Helios V2 Technical Specification](docs/HELIOS_V2_TECHNICAL_SPEC.md).
+## Benchmark routing
 
-## Quick start on macOS
+Helios performs **web search only** for registry updates; it does not run private benchmark tests. Evidence must:
 
-Requirements: macOS, Python 3.10+, Node.js 22+, npm, and an OpenRouter API key.
+- come from an official leaderboard, benchmark site, or primary paper;
+- provide one comparable ranking with at least three distinct models;
+- include citation URLs returned by web search;
+- avoid display-only tables, aggregators, estimates, and fabricated/composite scores.
+
+If evidence is stale, insufficient, or the ranked models are unavailable on OpenRouter, Helios reports the limitation instead of claiming a strongest model.
+
+## Installation
+
+Requirements on both platforms: Python 3.10+, Node.js 22+, npm, Git, and an OpenRouter API key.
+
+### macOS
 
 ```bash
 git clone https://github.com/Erfouni/helios-llm-orchestrator.git
@@ -107,9 +113,21 @@ cd helios-llm-orchestrator
 ./scripts/install-macos.sh
 ```
 
-The installer asks for the OpenRouter key with hidden input and stores it in macOS Keychain. It does not write the key to this repository.
+The installer validates runtime versions, runs tests and security checks, stores the API key in macOS Keychain, installs both LaunchAgents, and attempts an initial stale-only benchmark refresh. The service uses legacy LaunchAgent and Keychain labels for upgrade compatibility.
 
-Verify the HTTP agent:
+### Windows 10/11
+
+Open PowerShell as the Windows user who will run Helios:
+
+```powershell
+git clone https://github.com/Erfouni/helios-llm-orchestrator.git
+Set-Location helios-llm-orchestrator
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1
+```
+
+The Windows installer performs the same checks, encrypts the OpenRouter key with Windows DPAPI for the current user, creates an at-logon Scheduled Task for the local agent, creates the Monday 03:00 benchmark-refresh task, and attempts the initial refresh. See the [Windows guide](docs/WINDOWS.md) and [Windows MCP example](mcp/client-config.windows.example.json) for configuration, key rotation, task management, and uninstall steps.
+
+Verify the local agent:
 
 ```bash
 curl http://127.0.0.1:3188/health
@@ -121,16 +139,18 @@ Start the MCP server manually:
 npm run mcp:start
 ```
 
-For MCP client configuration, copy [mcp/client-config.example.json](mcp/client-config.example.json), replace the absolute project path, and add the entry to your MCP client.
+Copy [mcp/client-config.example.json](mcp/client-config.example.json), replace the absolute project path, and add it to your MCP client configuration.
 
 ## MCP tools
 
-- `openrouter_list_models`
-- `openrouter_run_model`
-- `openrouter_compare_models`
-- `helios_get_benchmark_registry`
-- `helios_select_benchmark_model`
-- `helios_refresh_benchmarks`
+| Tool | Purpose |
+| --- | --- |
+| `openrouter_list_models` | Search the live OpenRouter catalog |
+| `openrouter_run_model` | Run one approved specialist task |
+| `openrouter_compare_models` | Compare two to four models |
+| `helios_get_benchmark_registry` | Inspect evidence and freshness |
+| `helios_select_benchmark_model` | Select an eligible specialist by category |
+| `helios_refresh_benchmarks` | Explicitly run a stale-only or full web refresh |
 
 ## HTTP API
 
@@ -144,24 +164,26 @@ For MCP client configuration, copy [mcp/client-config.example.json](mcp/client-c
 - `GET /benchmarks/select?category=<category>`
 - `POST /benchmarks/refresh`
 
-See [API documentation](docs/API.md) for request examples and [راهنمای فارسی](docs/USAGE_FA.md) for the Persian guide.
+There are intentionally no `/v2/projects` endpoints in the current server. See [API documentation](docs/API.md) and the [راهنمای فارسی](docs/USAGE_FA.md).
 
 ## Security
 
-- No credential is committed.
-- `.env`, logs, build output, and dependencies are ignored.
-- The default listener is loopback only; non-loopback configuration is rejected.
-- OpenRouter credentials are fetched from macOS Keychain or a process environment variable.
-- External model output is treated as untrusted input.
-- Model routing never grants an external model direct authority to write files or publish content.
+- The listener rejects non-loopback hosts.
+- OpenRouter credentials come from macOS Keychain, a Windows DPAPI-encrypted user credential, or the process environment and are never returned.
+- Optional `HELIOS_LOCAL_API_KEY` authentication can protect local HTTP calls when the MCP process is configured with the same value.
+- Request bodies, messages, numeric parameters, paid concurrency, and model counts are bounded.
+- HTTP errors do not expose unexpected internal exception details.
+- External model output is treated as untrusted data.
+- Routing never grants an external model authority to write files or publish content.
 
-Run the checks before every commit:
+Run the complete verification suite:
 
 ```bash
 npm ci
 npm test
 npm run audit:high
 npm run scan:secrets
+npm run audit:prod
 ```
 
 The dependency audit fails CI for high- and critical-severity findings. Moderate findings are still printed for review instead of being hidden.
