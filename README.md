@@ -1,4 +1,4 @@
-# Helios — Benchmark-Guided Multi-LLM Orchestrator
+# Helios — Multi-LLM Orchestrator
 
 > Turn ChatGPT or Codex into the lead orchestrator of a specialist AI team.
 
