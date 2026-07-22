@@ -25,6 +25,7 @@ No purchased domain is needed for local use. A public HTTPS address is required 
 - Search the live OpenRouter model catalog.
 - Run one requested model by alias or exact OpenRouter slug.
 - Compare two to four models in parallel.
+- Refresh a web-only public benchmark registry every week and select the highest cited ranked model available on OpenRouter for each task category.
 - Report the model actually returned by OpenRouter.
 - Keep the OpenRouter credential outside Git; on macOS it is stored in Keychain.
 - Bind the HTTP agent to loopback only.
@@ -65,8 +66,12 @@ For MCP client configuration, copy [mcp/client-config.example.json](mcp/client-c
 - `POST /run`
 - `POST /compare`
 - `POST /refresh-models`
+- `GET /benchmarks/status`
+- `GET /benchmarks?category=<category>`
+- `GET /benchmarks/select?category=<category>`
+- `POST /benchmarks/refresh`
 
-See [docs/API.md](docs/API.md) for request examples and [docs/USAGE_FA.md](docs/USAGE_FA.md) for the Persian guide.
+See [docs/API.md](docs/API.md) for request examples and [docs/USAGE_FA.md](docs/USAGE_FA.md) for the Persian guide. The macOS installer also installs a Monday 03:00 local-time benchmark refresh job. It performs public web search only and does not run private model evaluations.
 
 ## Security
 

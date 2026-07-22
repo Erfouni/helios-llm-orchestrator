@@ -22,6 +22,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+try:
+    from agent.benchmark_registry import (
+        BenchmarkRegistryError,
+        refresh_registry,
+        registry_status,
+        registry_view,
+        select_benchmark_model,
+    )
+except ModuleNotFoundError:
+    from benchmark_registry import (  # type: ignore
+        BenchmarkRegistryError,
+        refresh_registry,
+        registry_status,
+        registry_view,
+        select_benchmark_model,
+    )
+
 BASE_DIR = Path(__file__).resolve().parents[1]
 ENV_FILE = BASE_DIR / ".env"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -383,8 +400,15 @@ def public_model(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def safe_benchmark_status() -> dict[str, Any]:
+    try:
+        return registry_status()
+    except BenchmarkRegistryError as exc:
+        return {"status": "error", "error": str(exc)}
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "HeliosRouter/1.0"
+    server_version = "HeliosRouter/1.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(
@@ -431,8 +455,24 @@ class Handler(BaseHTTPRequestHandler):
                         "service": "helios-multimodel-router",
                         "configured": api_key_configured(),
                         "loopback_only": True,
+                        "benchmarks": safe_benchmark_status(),
                     },
                 )
+                return
+            if parsed.path == "/benchmarks/status":
+                self.send_json(200, registry_status())
+                return
+            if parsed.path == "/benchmarks":
+                query = urllib.parse.parse_qs(parsed.query)
+                category = (query.get("category") or [None])[0]
+                self.send_json(200, registry_view(category))
+                return
+            if parsed.path == "/benchmarks/select":
+                query = urllib.parse.parse_qs(parsed.query)
+                category = (query.get("category") or [""])[0].strip()
+                if not category:
+                    raise BenchmarkRegistryError("category is required")
+                self.send_json(200, select_benchmark_model(category))
                 return
             if parsed.path == "/models":
                 query = urllib.parse.parse_qs(parsed.query)
@@ -450,6 +490,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"models": [public_model(item) for item in models[:limit]]})
                 return
             self.send_json(404, {"error": "Not found"})
+        except BenchmarkRegistryError as exc:
+            self.send_json(exc.status, {"error": str(exc), "details": exc.details})
         except GatewayError as exc:
             self.send_json(exc.status, {"error": str(exc), "details": exc.details})
         except Exception as exc:
@@ -472,7 +514,17 @@ class Handler(BaseHTTPRequestHandler):
                 models = get_models(force=True)
                 self.send_json(200, {"ok": True, "model_count": len(models)})
                 return
+            if parsed.path == "/benchmarks/refresh":
+                result = refresh_registry(
+                    openrouter_request,
+                    get_models(force=True),
+                    only_if_stale=bool(data.get("only_if_stale", False)),
+                )
+                self.send_json(200, result)
+                return
             self.send_json(404, {"error": "Not found"})
+        except BenchmarkRegistryError as exc:
+            self.send_json(exc.status, {"error": str(exc), "details": exc.details})
         except GatewayError as exc:
             self.send_json(exc.status, {"error": str(exc), "details": exc.details})
         except Exception as exc:

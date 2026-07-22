@@ -9,7 +9,7 @@
   },
   "scripts": {
     "mcp:start": "node mcp/mcp-server.mjs",
-    "check": "node --check mcp/mcp-server.mjs && python3 -m py_compile agent/server.py",
+    "check": "node --check mcp/mcp-server.mjs && python3 -m py_compile agent/server.py agent/benchmark_registry.py scripts/refresh-benchmarks.py",
     "test": "npm run check && python3 -m unittest discover -s tests -p 'test_*.py'",
     "scan:secrets": "bash scripts/scan-secrets.sh"
   },
