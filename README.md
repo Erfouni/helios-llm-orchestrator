@@ -8,7 +8,7 @@ Helios is a local-first **multi-LLM orchestrator, MCP server, and OpenRouter gat
 
 The goal of Helios is to make GPT the lead of a professional, multi-model AI team.
 
-A complex project contains different kinds of work: research, backend engineering, frontend implementation, reasoning, vision, review, and more. Helios gives the orchestrator one secure interface for delegating those jobs to specialized models through OpenRouter. A web-sourced benchmark registry is refreshed weekly so model selection can follow current public evidence rather than a permanently hardcoded list.
+A complex project contains different kinds of work: research, product design, backend engineering, frontend implementation, reasoning, OCR, vision, generation, and review. GPT first decomposes the project brief into small, testable tasks with explicit dependencies and acceptance criteria. Helios then classifies every task and gives the orchestrator one secure interface for assigning it to a specialized model through OpenRouter. A web-sourced benchmark registry is refreshed weekly so each assignment can follow current public evidence rather than a permanently hardcoded model list.
 
 For example, a project might use:
 
@@ -22,52 +22,61 @@ For example, a project might use:
 
 These model names are examples, not fixed assignments. The registry can change the selected model as public leaderboards change and as models become available on OpenRouter.
 
-## Architecture
+## Big-project orchestration workflow
+
+This is the target Helios V2 project workflow. It makes project decomposition and per-task specialist assignment the central path:
 
 ```mermaid
 flowchart TB
-    U["User task or project brief"] --> O["ChatGPT / Codex<br/>Lead orchestrator"]
+    U["Project brief<br/>goals • constraints • deliverables"] --> O["ChatGPT / Codex<br/>Lead orchestrator"]
     O <-->|"MCP over stdio"| M["Helios MCP server"]
     M <-->|"Loopback HTTP"| A["Local Helios agent<br/>127.0.0.1:3188"]
 
-    A --> X{"Execution mode"}
-    X -->|"Direct"| D["Run one specialist"]
-    X -->|"Compare"| C["Run 2–4 models in parallel"]
-    X -.->|"V2 roadmap"| P["Plan task DAG<br/>execute → verify → integrate"]
+    A --> P["Decompose the project"]
+    P --> T["Atomic task set<br/>R&D • Product • Backend • Frontend<br/>OCR • Vision • Image/Video • Analysis"]
+    T --> D["Validated task DAG<br/>dependencies • inputs • acceptance criteria"]
+    D --> Q["Ready-task queue"]
+    Q --> C["Classify every task<br/>capability • risk • tools"]
 
-    D --> R["Benchmark-aware router"]
+    W["Public benchmarks<br/>and leaderboards"] -->|"Weekly web refresh"| B["Versioned benchmark registry"]
+    B -->|"Cited ranking by category"| R["Select the strongest available<br/>specialist for each task"]
     C --> R
-    P --> R
-
-    W["Public benchmark<br/>and leaderboard sources"] -->|"Weekly web refresh"| B["Versioned benchmark registry"]
-    B -->|"Task category + cited ranking"| R
 
     R --> G["OpenRouter"]
-    G --> T["Research • Coding • Frontend<br/>Reasoning • Vision • More"]
-    T -->|"Model output + confirmed model ID"| A
+    G --> E["Parallel specialist execution<br/>confirmed model ID per task"]
+    E --> V["Independent verification<br/>criteria • evidence • tool checks"]
+    V -->|"Revision required"| Q
+    V -->|"Accepted outputs"| I["GPT integrates the task results"]
+    I --> F["Final answer • artifacts<br/>provenance • unresolved risks"]
 
     classDef client fill:#172554,stroke:#60a5fa,color:#ffffff,stroke-width:2px;
-    classDef helios fill:#3b0764,stroke:#c084fc,color:#ffffff,stroke-width:2px;
-    classDef decision fill:#78350f,stroke:#fbbf24,color:#ffffff,stroke-width:2px;
+    classDef planning fill:#3b0764,stroke:#c084fc,color:#ffffff,stroke-width:2px;
     classDef evidence fill:#064e3b,stroke:#34d399,color:#ffffff,stroke-width:2px;
-    classDef provider fill:#4c0519,stroke:#fb7185,color:#ffffff,stroke-width:2px;
+    classDef execution fill:#4c0519,stroke:#fb7185,color:#ffffff,stroke-width:2px;
+    classDef review fill:#78350f,stroke:#fbbf24,color:#ffffff,stroke-width:2px;
+    classDef result fill:#164e63,stroke:#22d3ee,color:#ffffff,stroke-width:2px;
 
     class U,O client;
-    class M,A,D,C,P,R helios;
-    class X decision;
+    class M,A,P,T,D,Q,C,R planning;
     class W,B evidence;
-    class G,T provider;
+    class G,E execution;
+    class V review;
+    class I,F result;
 ```
+
+For a large project, GPT remains the lead orchestrator: it creates the task graph, Helios chooses a task-specific specialist for each ready node, independent tasks run in parallel, and GPT integrates only accepted outputs. Direct and Compare modes remain available for smaller requests.
 
 The control path stays local: the MCP server communicates over stdio and the HTTP agent accepts loopback traffic only. A public domain is unnecessary unless a remote client must connect directly over the internet.
 
-## How model selection works
+## How project routing works
 
-1. The orchestrator identifies the kind of work, such as coding, frontend, mathematics, vision, or web research.
-2. Helios queries its local benchmark registry for that category.
-3. The registry returns the highest cited public-benchmark model currently available through OpenRouter.
-4. Helios routes the request and records the exact model returned by OpenRouter.
-5. When stronger validation is needed, the orchestrator can compare several models and keep each answer attributable to its source model.
+1. GPT turns the project objective into atomic tasks with explicit inputs, outputs, dependencies, and acceptance criteria.
+2. Helios validates the task DAG and places dependency-satisfied tasks in the ready queue.
+3. Every ready task is classified by capability, such as web research, coding, frontend, mathematics, OCR, vision, image generation, or video generation.
+4. Helios queries the local benchmark registry separately for each task category.
+5. The strongest cited public-benchmark model currently available through OpenRouter is assigned to that task; independent tasks can run in parallel.
+6. A separate reviewer checks each output against its acceptance criteria and either accepts it or returns it for revision.
+7. GPT integrates the accepted task results into the final project answer and artifacts.
 
 The benchmark registry uses **public web evidence only**. Helios does not claim to run private benchmark tests. The macOS installer schedules a refresh every Monday at 03:00 local time and keeps versioned history.
 
