@@ -4,6 +4,7 @@
 *.dpapi
 node_modules/
 logs/
+data/runtime/
 *.log
 *.pid
 .DS_Store
