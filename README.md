@@ -4,6 +4,8 @@
 
 Helios is a local-first **multi-LLM orchestrator, MCP server, and OpenRouter gateway**. It lets ChatGPT, Codex, or another MCP client break a complex project into focused tasks, select an evidence-backed specialist for each task, review the results, and integrate the accepted work.
 
+**Try it first:** the [five-minute quickstart](#quickstart-five-minutes-no-installer) runs Helios from a clone with no installer and no background services.
+
 ## Project goal
 
 One model should not have to be the best at everything. Helios makes GPT the lead of a professional multi-model team:
@@ -101,6 +103,57 @@ Helios performs **web search only** for registry updates; it does not run privat
 
 If evidence is stale, insufficient, or the ranked models are unavailable on OpenRouter, Helios reports the limitation instead of claiming a strongest model.
 
+## Quickstart (five minutes, no installer)
+
+Try Helios before running the installer: nothing starts at login, no scheduled task is created, and the API key lives only in one terminal session. You need Python 3.10+, Node.js 22+, Git, and an [OpenRouter API key](https://openrouter.ai/keys).
+
+```bash
+git clone https://github.com/Erfouni/helios-llm-orchestrator.git
+cd helios-llm-orchestrator
+npm ci
+npm test    # offline tests, no key needed
+```
+
+Start the local agent in its own terminal. The key is read with hidden input, so it never lands in your shell history.
+
+macOS or Linux:
+
+```bash
+read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY   # paste the key, press Enter
+python3 agent/server.py
+```
+
+Windows PowerShell:
+
+```powershell
+$env:OPENROUTER_API_KEY = [Net.NetworkCredential]::new('', (Read-Host 'OpenRouter API key' -AsSecureString)).Password
+py -3 agent\server.py
+```
+
+From a second terminal, check the agent and browse the live OpenRouter catalog. Neither call costs anything:
+
+```bash
+curl http://127.0.0.1:3188/health
+curl "http://127.0.0.1:3188/models?search=claude&limit=3"
+```
+
+In Windows PowerShell, use `Invoke-RestMethod` with the same URLs (`curl` there is an alias for `Invoke-WebRequest`).
+
+`/health` should report `"configured": true` and a benchmark registry with `"status": "empty"`. A fresh clone ships no registry, so specialist selection is refused until the first refresh. That refresh makes one **paid** OpenRouter web-search request per enabled category in [config/benchmark_sources.json](config/benchmark_sources.json):
+
+```bash
+curl -X POST http://127.0.0.1:3188/benchmarks/refresh \
+  -H "Content-Type: application/json" -d '{"only_if_stale": true}'
+```
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:3188/benchmarks/refresh -ContentType application/json -Body '{"only_if_stale": true}'
+```
+
+The registry is written to `data/runtime/` in the clone (on macOS, `~/Library/Application Support/Helios`); set `HELIOS_STATE_DIR` to keep it elsewhere.
+
+Finally, add [mcp/client-config.example.json](mcp/client-config.example.json) to your MCP client with the absolute path of your clone. The client should list six Helios tools. When you want Helios to start at login and refresh its benchmarks every Monday, run the installer below; it keeps the key in macOS Keychain or Windows DPAPI instead of the environment.
+
 ## Installation
 
 Requirements on both platforms: Python 3.10+, Node.js 22+, npm, Git, and an OpenRouter API key.
@@ -181,7 +234,6 @@ Run the complete verification suite:
 ```bash
 npm ci
 npm test
-npm run audit:high
 npm run scan:secrets
 npm run audit:prod
 ```
