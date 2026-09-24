@@ -176,7 +176,10 @@ server.registerTool(
     description:
       "Read the weekly web-only public benchmark registry and per-category freshness.",
     inputSchema: { category: z.string().optional() },
-    outputSchema: z.record(z.string(), z.unknown()),
+    // A loose object, not z.record(): the SDK needs an object schema or a raw
+    // shape here, and a bare record normalizes to undefined, which makes every
+    // successful call throw. These three payloads vary in shape by request.
+    outputSchema: z.looseObject({}),
     annotations: { readOnlyHint: true },
   },
   async ({ category }) => {
@@ -198,7 +201,10 @@ server.registerTool(
     description:
       "Select the highest-ranked cited model that passes current registry quality gates and is available on OpenRouter. Does not run private tests.",
     inputSchema: { category: z.string().min(1) },
-    outputSchema: z.record(z.string(), z.unknown()),
+    // A loose object, not z.record(): the SDK needs an object schema or a raw
+    // shape here, and a bare record normalizes to undefined, which makes every
+    // successful call throw. These three payloads vary in shape by request.
+    outputSchema: z.looseObject({}),
     annotations: { readOnlyHint: true },
   },
   async ({ category }) => {
@@ -221,7 +227,10 @@ server.registerTool(
     description:
       "Run web-only public benchmark searches and atomically publish a versioned registry. This incurs provider cost; call only on explicit request.",
     inputSchema: { only_if_stale: z.boolean().optional().default(true) },
-    outputSchema: z.record(z.string(), z.unknown()),
+    // A loose object, not z.record(): the SDK needs an object schema or a raw
+    // shape here, and a bare record normalizes to undefined, which makes every
+    // successful call throw. These three payloads vary in shape by request.
+    outputSchema: z.looseObject({}),
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,

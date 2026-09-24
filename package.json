@@ -10,7 +10,7 @@
   "scripts": {
     "mcp:start": "node mcp/mcp-server.mjs",
     "check": "node --check mcp/mcp-server.mjs && node --check scripts/scan-secrets.mjs && node --check scripts/run-python.mjs && node scripts/run-python.mjs -m py_compile agent/server.py agent/benchmark_registry.py scripts/refresh-benchmarks.py",
-    "test": "npm run check && node scripts/run-python.mjs -m unittest discover -s tests -p test_*.py",
+    "test": "npm run check && node --test tests/mcp-server.test.mjs && node scripts/run-python.mjs -m unittest discover -s tests -p test_*.py",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
