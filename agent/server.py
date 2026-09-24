@@ -199,13 +199,17 @@ def get_models(force: bool = False) -> list[dict[str, Any]]:
     with _model_lock:
         cached = _model_cache["models"]
         if cached and not force and now - _model_cache["loaded_at"] < MODEL_CACHE_TTL_SECONDS:
-            return cached
+            # Callers sort and filter what they get back, and this server is
+            # threaded. CPython empties a list for the whole duration of an
+            # in-place sort, so handing out the cached list itself would let one
+            # request blank the catalog for every other request in flight.
+            return list(cached)
     models = openrouter_request("GET", "/models", timeout=60).get("data")
     if not isinstance(models, list):
         raise GatewayError("OpenRouter model catalog response was invalid", 502)
     with _model_lock:
         _model_cache.update({"models": models, "loaded_at": now})
-    return models
+    return list(models)
 
 
 def newest_matching(
