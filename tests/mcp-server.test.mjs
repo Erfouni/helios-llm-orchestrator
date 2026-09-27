@@ -19,11 +19,36 @@ const PAYLOADS = {
 let gateway;
 let client;
 const requests = [];
+const runBodies = [];
 
 before(async () => {
   gateway = http.createServer((req, res) => {
     const [path, query = ""] = req.url.split("?");
     requests.push({ method: req.method, path, query });
+    if (path === "/run" || path === "/compare") {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        const body = JSON.parse(raw);
+        runBodies.push({ path, body });
+        const answer = (model) => ({
+          model_requested: model,
+          model_resolved: model,
+          model_used: model,
+          answer: "ok",
+          usage: {},
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify(
+            path === "/run"
+              ? answer(body.model)
+              : { results: body.models.map(answer) },
+          ),
+        );
+      });
+      return;
+    }
     if (path === "/benchmarks/select" && !query.includes("category=coding")) {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "unknown category" }));
@@ -92,3 +117,29 @@ test("a gateway error comes back as a tool error, not a crash", async () => {
   assert.equal(result.isError, true);
   assert.equal(result.content[0].text, "unknown category");
 });
+
+// The gateway rejects max_tokens above its MAX_OUTPUT_TOKENS and uses that cap
+// when max_tokens is absent, so the MCP layer must not invent its own default.
+for (const [name, args, path] of [
+  ["openrouter_run_model", { model: "vendor/model", prompt: "hi" }, "/run"],
+  [
+    "openrouter_compare_models",
+    { models: ["vendor/a", "vendor/b"], prompt: "hi" },
+    "/compare",
+  ],
+]) {
+  test(`${name} leaves max_tokens to the gateway when it is not given`, async () => {
+    runBodies.length = 0;
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError, undefined, result.content?.[0]?.text);
+    assert.equal(runBodies.length, 1);
+    assert.equal(runBodies[0].path, path);
+    assert.equal("max_tokens" in runBodies[0].body, false);
+  });
+
+  test(`${name} forwards an explicit max_tokens`, async () => {
+    runBodies.length = 0;
+    await client.callTool({ name, arguments: { ...args, max_tokens: 1234 } });
+    assert.equal(runBodies[0].body.max_tokens, 1234);
+  });
+}
