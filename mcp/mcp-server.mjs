@@ -104,7 +104,13 @@ server.registerTool(
       prompt: z.string().min(1),
       system: z.string().optional(),
       reasoning_effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
-      max_tokens: z.number().int().min(1).max(8192).optional().default(4096),
+      max_tokens: z
+        .number()
+        .int()
+        .min(1)
+        .max(8192)
+        .optional()
+        .describe("Output token limit. Omit it to use the gateway's MAX_OUTPUT_TOKENS."),
       temperature: z.number().min(0).max(2).optional(),
       top_p: z.number().min(0).max(1).optional(),
     },
@@ -146,7 +152,13 @@ server.registerTool(
       prompt: z.string().min(1),
       system: z.string().optional(),
       reasoning_effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
-      max_tokens: z.number().int().min(1).max(8192).optional().default(4096),
+      max_tokens: z
+        .number()
+        .int()
+        .min(1)
+        .max(8192)
+        .optional()
+        .describe("Output token limit. Omit it to use the gateway's MAX_OUTPUT_TOKENS."),
       temperature: z.number().min(0).max(2).optional(),
       top_p: z.number().min(0).max(1).optional(),
     },
