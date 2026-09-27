@@ -6,6 +6,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -590,14 +591,29 @@ class Handler(BaseHTTPRequestHandler):
                 _paid_slots.release()
 
 
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that can also listen on the IPv6 loopback address."""
+
+    def __init__(self, server_address: tuple[str, int], handler: type) -> None:
+        # ThreadingHTTPServer always opens an AF_INET socket, so binding it to
+        # "::1" fails with getaddrinfo errors although ::1 is an allowed host.
+        if ":" in server_address[0]:
+            self.address_family = socket.AF_INET6
+        super().__init__(server_address, handler)
+
+
+def display_url(host: str, port: int) -> str:
+    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+
+
 def main() -> None:
-    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    httpd = LoopbackHTTPServer((HOST, PORT), Handler)
     print(
         json.dumps(
             {
                 "service": "helios-llm-orchestrator",
                 "version": "1.2.0",
-                "url": f"http://{HOST}:{PORT}",
+                "url": display_url(HOST, PORT),
                 "env_file": str(ENV_FILE),
             }
         ),
