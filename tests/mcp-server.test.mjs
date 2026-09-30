@@ -31,6 +31,12 @@ before(async () => {
       req.on("end", () => {
         const body = JSON.parse(raw);
         runBodies.push({ path, body });
+        const models = path === "/run" ? [body.model] : body.models;
+        if (models.includes("vendor/rejected")) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "model is not allowed" }));
+          return;
+        }
         const answer = (model) => ({
           model_requested: model,
           model_resolved: model,
@@ -108,6 +114,19 @@ test("helios_refresh_benchmarks is a POST to the refresh endpoint", async () => 
     [["POST", "/benchmarks/refresh"]],
   );
 });
+
+// Run and compare have strict output schemas, and the client checks
+// structuredContent against them even on errors (it has listed the tools above).
+for (const [name, args] of [
+  ["openrouter_run_model", { model: "vendor/rejected", prompt: "hi" }],
+  ["openrouter_compare_models", { models: ["vendor/a", "vendor/rejected"], prompt: "hi" }],
+]) {
+  test(`${name} passes a gateway rejection through as a tool error`, async () => {
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, "model is not allowed");
+  });
+}
 
 test("a gateway error comes back as a tool error, not a crash", async () => {
   const result = await client.callTool({

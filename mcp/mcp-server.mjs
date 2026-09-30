@@ -45,9 +45,10 @@ function result(value) {
 
 function errorResult(error) {
   const message = error instanceof Error ? error.message : String(error);
+  // No structuredContent: clients check it against the tool's outputSchema even
+  // on errors, and { error } doesn't fit the run/compare schemas.
   return {
     isError: true,
-    structuredContent: { error: message },
     content: [{ type: "text", text: message }],
   };
 }
