@@ -16,6 +16,8 @@ const PAYLOADS = {
   "/benchmarks/refresh": { refreshed: false, reason: "registry is fresh" },
 };
 
+const GATEWAY_MAX_OUTPUT_TOKENS = 16000;
+
 let gateway;
 let client;
 const requests = [];
@@ -35,6 +37,16 @@ before(async () => {
         if (models.includes("vendor/rejected")) {
           res.writeHead(400, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "model is not allowed" }));
+          return;
+        }
+        // Stand-in for an operator who raised MAX_OUTPUT_TOKENS on the gateway.
+        if (body.max_tokens > GATEWAY_MAX_OUTPUT_TOKENS) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: `max_tokens must be between 1 and ${GATEWAY_MAX_OUTPUT_TOKENS}`,
+            }),
+          );
           return;
         }
         const answer = (model) => ({
@@ -160,5 +172,19 @@ for (const [name, args, path] of [
     runBodies.length = 0;
     await client.callTool({ name, arguments: { ...args, max_tokens: 1234 } });
     assert.equal(runBodies[0].body.max_tokens, 1234);
+  });
+
+  test(`${name} lets the gateway allow more than 8192 tokens`, async () => {
+    runBodies.length = 0;
+    const result = await client.callTool({ name, arguments: { ...args, max_tokens: 12000 } });
+    assert.equal(result.isError, undefined, result.content?.[0]?.text);
+    assert.equal(runBodies.length, 1);
+    assert.equal(runBodies[0].body.max_tokens, 12000);
+  });
+
+  test(`${name} reports the gateway's own max_tokens limit`, async () => {
+    const result = await client.callTool({ name, arguments: { ...args, max_tokens: 20000 } });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, "max_tokens must be between 1 and 16000");
   });
 }
