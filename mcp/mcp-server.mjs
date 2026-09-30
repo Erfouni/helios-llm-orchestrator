@@ -109,9 +109,10 @@ server.registerTool(
         .number()
         .int()
         .min(1)
-        .max(8192)
         .optional()
-        .describe("Output token limit. Omit it to use the gateway's MAX_OUTPUT_TOKENS."),
+        .describe(
+          "Output token limit, up to the gateway's MAX_OUTPUT_TOKENS (8192 unless the operator raised it). Omit it to use that limit.",
+        ),
       temperature: z.number().min(0).max(2).optional(),
       top_p: z.number().min(0).max(1).optional(),
     },
@@ -157,9 +158,10 @@ server.registerTool(
         .number()
         .int()
         .min(1)
-        .max(8192)
         .optional()
-        .describe("Output token limit. Omit it to use the gateway's MAX_OUTPUT_TOKENS."),
+        .describe(
+          "Output token limit, up to the gateway's MAX_OUTPUT_TOKENS (8192 unless the operator raised it). Omit it to use that limit.",
+        ),
       temperature: z.number().min(0).max(2).optional(),
       top_p: z.number().min(0).max(1).optional(),
     },
