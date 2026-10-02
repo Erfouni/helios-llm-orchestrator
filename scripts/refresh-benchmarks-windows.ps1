@@ -27,7 +27,19 @@ try {
   if ($Log) {
     $logDirectory = Join-Path $ProjectRoot "logs"
     New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
-    & $PythonBin @arguments 1>> (Join-Path $logDirectory "benchmark-refresh.stdout.log") 2>> (Join-Path $logDirectory "benchmark-refresh.stderr.log")
+    $stdoutLog = Join-Path $logDirectory "benchmark-refresh.stdout.log"
+    $stderrLog = Join-Path $logDirectory "benchmark-refresh.stderr.log"
+    # Same as start-agent-windows.ps1: under "Stop", Windows PowerShell would end
+    # the refresh at the first line Python writes to stderr (a warning is enough).
+    $ErrorActionPreference = "Continue"
+    & $PythonBin @arguments 2>&1 | ForEach-Object {
+      if ($_ -is [System.Management.Automation.ErrorRecord]) {
+        [IO.File]::AppendAllText($stderrLog, $_.Exception.Message + [Environment]::NewLine)
+      } else {
+        [IO.File]::AppendAllText($stdoutLog, "$_" + [Environment]::NewLine)
+      }
+    }
+    $ErrorActionPreference = "Stop"
   } else {
     & $PythonBin @arguments
   }

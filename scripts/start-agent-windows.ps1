@@ -26,7 +26,20 @@ try {
   if ($Log) {
     $logDirectory = Join-Path $ProjectRoot "logs"
     New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
-    & $PythonBin (Join-Path $ProjectRoot "agent\server.py") 1>> (Join-Path $logDirectory "stdout.log") 2>> (Join-Path $logDirectory "stderr.log")
+    $stdoutLog = Join-Path $logDirectory "stdout.log"
+    $stderrLog = Join-Path $logDirectory "stderr.log"
+    # Windows PowerShell turns each redirected stderr line of a native command
+    # into an error record, and under "Stop" the first one (the first access-log
+    # line) ends this script and takes the agent with it. Copy the lines as text.
+    $ErrorActionPreference = "Continue"
+    & $PythonBin (Join-Path $ProjectRoot "agent\server.py") 2>&1 | ForEach-Object {
+      if ($_ -is [System.Management.Automation.ErrorRecord]) {
+        [IO.File]::AppendAllText($stderrLog, $_.Exception.Message + [Environment]::NewLine)
+      } else {
+        [IO.File]::AppendAllText($stdoutLog, "$_" + [Environment]::NewLine)
+      }
+    }
+    $ErrorActionPreference = "Stop"
   } else {
     & $PythonBin (Join-Path $ProjectRoot "agent\server.py")
   }
