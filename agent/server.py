@@ -149,6 +149,25 @@ def api_key_configured() -> bool:
         return False
 
 
+LOOPBACK_HOST_NAMES = {"127.0.0.1", "localhost", "[::1]"}
+
+
+def loopback_host_header(value: Any) -> bool:
+    """True for a Host header naming the loopback interface, with any port.
+
+    Binding to 127.0.0.1 does not stop a DNS-rebound web page from reaching
+    the port; its requests still carry the attacker's own host name.
+    """
+    host = str(value or "").strip().lower()
+    if host.startswith("["):
+        name, _, port = host.partition("]")
+        name += "]"
+        port = port[1:] if port.startswith(":") else port
+    else:
+        name, _, port = host.partition(":")
+    return name in LOOPBACK_HOST_NAMES and (port == "" or port.isdigit())
+
+
 def local_request_authorized(headers: Any) -> bool:
     if not LOCAL_API_KEY:
         return True
@@ -478,6 +497,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def read_json(self) -> dict[str, Any]:
+        # Browsers send text/plain and form posts cross-site without a CORS
+        # preflight; requiring JSON keeps web pages away from the paid routes.
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.split(";", 1)[0].strip().lower() != "application/json":
+            raise GatewayError("Content-Type must be application/json", 415)
         raw_length = self.headers.get("Content-Length", "")
         try:
             length = int(raw_length)
@@ -505,6 +529,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         try:
             parsed = urllib.parse.urlparse(self.path)
+            if not loopback_host_header(self.headers.get("Host")):
+                raise GatewayError("Host must be a loopback address", 421)
             if parsed.path != "/health" and not local_request_authorized(self.headers):
                 self.send_json(401, {"error": "Unauthorized"})
                 return
@@ -556,6 +582,8 @@ class Handler(BaseHTTPRequestHandler):
         acquired = False
         try:
             parsed = urllib.parse.urlparse(self.path)
+            if not loopback_host_header(self.headers.get("Host")):
+                raise GatewayError("Host must be a loopback address", 421)
             if not local_request_authorized(self.headers):
                 self.send_json(401, {"error": "Unauthorized"})
                 return
