@@ -5,6 +5,7 @@
 node_modules/
 .npm-cache/
 logs/
+data/runtime/
 *.log
 *.pid
 .DS_Store

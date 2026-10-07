@@ -1,6 +1,6 @@
 # Helios V2 Technical Specification
 
-Status: Draft approved for implementation planning
+Status: Implemented in Helios 2.0.0 (deployed July 2026). This is the original design; the code lives in `agent/project_memory.py` and the `/v2` routes of `agent/server.py`.
 Date: 2026-07-22
 Target service: Mac OpenRouter Agent on `127.0.0.1:3188`
 

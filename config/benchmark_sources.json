@@ -7,6 +7,8 @@
   "max_output_tokens": 3500,
   "max_parallel": 3,
   "valid_days": 8,
+  "refresh_ahead_days": 2,
+  "max_evidence_age_days": 180,
   "min_ranked_models": 3,
   "exclude_domains": [
     "benchlm.ai",
@@ -34,6 +36,7 @@
   },
   "categories": {
     "reasoning": {
+      "description": "General analysis, planning, product thinking, or multi-step reasoning in text",
       "query": "current ARC-AGI-2 verified frontier model leaderboard top model scores",
       "benchmark_hints": [
         "ARC-AGI-2 Verified Leaderboard"
@@ -43,6 +46,7 @@
       ]
     },
     "coding": {
+      "description": "Writing, debugging, or reviewing backend code, scripts, or other software",
       "query": "current official SWE-bench Verified leaderboard top coding models",
       "benchmark_hints": [
         "SWE-bench Verified",
@@ -55,6 +59,7 @@
       ]
     },
     "frontend": {
+      "description": "Building web or app user interfaces: HTML, CSS, React components, layout, UI behavior",
       "query": "current Code Arena WebDev Frontend leaderboard top models",
       "benchmark_hints": [
         "Code Arena WebDev Frontend"
@@ -64,6 +69,7 @@
       ]
     },
     "agentic_tool_use": {
+      "description": "Calling tools or APIs over several steps as an autonomous agent",
       "query": "current Berkeley Function Calling Leaderboard BFCL V4 top models overall accuracy",
       "benchmark_hints": [
         "BFCL V4"
@@ -82,6 +88,7 @@
       "notes": "Directly fetched from the official BFCL leaderboard CSV used by the UC Berkeley/Gorilla leaderboard page."
     },
     "web_research": {
+      "description": "Researching current information across many web sources and synthesizing the findings",
       "query": "DeepResearch Bench leaderboard LLM with Search Tools top models by RACE overall score",
       "benchmark_hints": [
         "DeepResearch Bench RACE"
@@ -91,6 +98,7 @@
       ]
     },
     "long_context": {
+      "description": "Working over very long documents or large inputs that must be read as a whole",
       "query": "latest public long-context language model benchmark leaderboard",
       "benchmark_hints": [
         "LongBench v2",
@@ -103,6 +111,7 @@
       ]
     },
     "mathematics": {
+      "description": "Solving math problems, proofs, or quantitative calculations",
       "query": "latest public mathematics reasoning AI model benchmark leaderboard",
       "benchmark_hints": [
         "AIME",
@@ -114,6 +123,7 @@
       ]
     },
     "vision": {
+      "description": "Understanding or analyzing images, screenshots, charts, or diagrams",
       "query": "latest public multimodal image understanding model benchmark leaderboard",
       "benchmark_hints": [
         "MMMU-Pro",
@@ -125,6 +135,7 @@
       ]
     },
     "ocr": {
+      "description": "Extracting text from scanned documents, photos of text, or image-only PDFs",
       "query": "latest public OCR vision-language model benchmark leaderboard",
       "benchmark_hints": [
         "OCRBench v2",
@@ -136,6 +147,7 @@
       ]
     },
     "image_generation": {
+      "description": "Creating new images, illustrations, or diagrams from a description",
       "query": "latest public text-to-image generation model leaderboard",
       "benchmark_hints": [
         "Artificial Analysis Image Arena",
@@ -147,6 +159,7 @@
       ]
     },
     "video_generation": {
+      "description": "Creating video clips from a description",
       "query": "latest public AI text-to-video generation model leaderboard",
       "benchmark_hints": [
         "Artificial Analysis Video Arena",
@@ -158,6 +171,7 @@
       ]
     },
     "multilingual": {
+      "description": "Writing or translating text in languages other than English, including Persian",
       "query": "current Global-MMLU-Lite multilingual benchmark leaderboard top models average across languages",
       "benchmark_hints": [
         "Global-MMLU-Lite"

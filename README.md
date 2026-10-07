@@ -4,6 +4,8 @@
 
 Helios is a **multi-LLM orchestrator, MCP server, OpenRouter gateway, and durable project-memory service**. It lets ChatGPT, Codex, or another MCP client break a complex project into focused tasks, select an evidence-backed specialist for each task, review the results, and integrate the accepted work.
 
+**Try it first:** the [five-minute quickstart](#quickstart-five-minutes-no-installer) runs Helios from a clone with no installer and no background services.
+
 ## Project goal
 
 One model should not have to be the best at everything. Helios makes GPT the lead of a professional multi-model team:
@@ -27,7 +29,7 @@ flowchart TB
     P --> D["Reviewed task DAG<br/>dependencies • inputs • acceptance"]
     D --> Q["Ready-task queue<br/>up to 4 independent tasks"]
 
-    Q --> C["Classify each task<br/>research • coding • frontend<br/>reasoning • vision • generation"]
+    Q --> C["Jev classifies each task<br/>research • coding • frontend<br/>reasoning • vision • generation"]
     C --> M["Helios MCP server<br/>project memory + specialist execution"]
     M <-->|"Authenticated remote MCP"| A["GPT Computer Helios service<br/>loopback-only 127.0.0.1:3188"]
 
@@ -61,7 +63,7 @@ flowchart TB
 
 1. GPT defines the objective, requirements, constraints, and observable acceptance criteria.
 2. It decomposes the project into at most 12 atomic tasks and validates an acyclic dependency graph.
-3. It classifies every model task and asks Helios for the matching benchmark-guided specialist.
+3. It routes every model task: [Jev](#task-routing-with-jev) picks the task's category, Helios returns that category's benchmark-guided specialist, and a low-confidence route goes back to the user.
 4. It shows the reviewed execution plan before paid model calls.
 5. After approval, it runs dependency-ready tasks in parallel batches of up to four.
 6. Material outputs are checked against their acceptance criteria and, where practical, reviewed by a different model family.
@@ -74,7 +76,8 @@ Host-tool tasks—such as browsing, files, terminal commands, GitHub, or media g
 Available now:
 
 - ChatGPT/Codex-led project decomposition with durable task graphs;
-- per-task benchmark-guided specialist selection;
+- per-task benchmark-guided specialist selection, with Jev choosing each task's category;
+- typed Jev checks (choice, score, yes/no probability) as a cheap first acceptance gate;
 - parallel model execution, independent review, and final integration;
 - Direct mode for one named model and Compare mode for two to four models;
 - live OpenRouter model discovery;
@@ -95,9 +98,72 @@ Helios performs **web search only** for registry updates; it does not run privat
 - come from a per-category allowlist of official leaderboards, benchmark sites, or primary papers;
 - provide one comparable ranking with at least three distinct models;
 - include citation URLs returned by web search;
+- be no older than `max_evidence_age_days` (180 by default) when the source gives a date;
 - avoid display-only tables, aggregators, estimates, and fabricated/composite scores.
 
-If evidence is stale, insufficient, or the ranked models are unavailable on OpenRouter, Helios reports the limitation instead of claiming a strongest model.
+A ranked name only maps to the same OpenRouter model or a dated snapshot of it: a leaderboard's "GPT-5" never stands for `gpt-5-mini`, `gpt-5.1`, or an image variant. If evidence is stale, insufficient, or the ranked models are unavailable on OpenRouter, Helios reports the limitation instead of claiming a strongest model.
+
+A stale-only refresh pays only for categories that are missing, expired, or below the quality gates, and categories removed from the config are dropped from the registry.
+
+## Task routing with Jev
+
+[Jev](https://openrouter.ai/typesafe/jev-1.13) is TypeSafe's decision model. Instead of prose it returns typed answers with probabilities, and it runs on the same OpenRouter key through OpenRouter's separate decision endpoint, at a fraction of a cent per call.
+
+- `POST /route` asks Jev which configured category a task belongs to and returns that category's specialist from the benchmark registry. Below a confidence of 0.6 (`min_confidence`) it returns `needs_confirmation: true` and no specialist, so the orchestrator asks the user instead of guessing.
+- `POST /decide` exposes Jev's three question types: `choice` (one of 2–255 options), `score` (2–10 ordered levels), and `noul` (the probability that a condition holds). One `noul` question per acceptance criterion is a cheap first check before a paid review.
+
+The category `description` fields in [config/benchmark_sources.json](config/benchmark_sources.json) are the options Jev chooses between. Set `HELIOS_JEV_MODEL` to pin another Jev release.
+
+## Quickstart (five minutes, no installer)
+
+Try Helios before running the installer: nothing starts at login, no scheduled task is created, and the API key lives only in one terminal session. You need Python 3.10+, Node.js 22+, Git, and an [OpenRouter API key](https://openrouter.ai/keys).
+
+```bash
+git clone https://github.com/Erfouni/helios-llm-orchestrator.git
+cd helios-llm-orchestrator
+npm ci
+npm test    # offline tests, no key needed
+```
+
+Start the local agent in its own terminal. The key is read with hidden input, so it never lands in your shell history.
+
+macOS or Linux:
+
+```bash
+read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY   # paste the key, press Enter
+python3 agent/server.py
+```
+
+Windows PowerShell:
+
+```powershell
+$env:OPENROUTER_API_KEY = [Net.NetworkCredential]::new('', (Read-Host 'OpenRouter API key' -AsSecureString)).Password
+py -3 agent\server.py
+```
+
+From a second terminal, check the agent and browse the live OpenRouter catalog. Neither call costs anything:
+
+```bash
+curl http://127.0.0.1:3188/health
+curl "http://127.0.0.1:3188/models?search=claude&limit=3"
+```
+
+In Windows PowerShell, use `Invoke-RestMethod` with the same URLs (`curl` there is an alias for `Invoke-WebRequest`).
+
+`/health` should report `"configured": true` and a benchmark registry with `"status": "empty"`. A fresh clone ships no registry, so specialist selection is refused until the first refresh. That refresh makes one **paid** OpenRouter web-search request per enabled category in [config/benchmark_sources.json](config/benchmark_sources.json):
+
+```bash
+curl -X POST http://127.0.0.1:3188/benchmarks/refresh \
+  -H "Content-Type: application/json" -d '{"only_if_stale": true}'
+```
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:3188/benchmarks/refresh -ContentType application/json -Body '{"only_if_stale": true}'
+```
+
+The registry is written to `data/runtime/` in the clone (on macOS, `~/Library/Application Support/Helios`); set `HELIOS_STATE_DIR` to keep it elsewhere.
+
+Finally, add [mcp/client-config.example.json](mcp/client-config.example.json) to your MCP client with the absolute path of your clone. The client should list twenty Helios tools. When you want Helios to start at login and refresh its benchmarks every Monday, run the installer below; it keeps the key in macOS Keychain or Windows DPAPI instead of the environment.
 
 ## Installation
 
@@ -146,8 +212,16 @@ Copy [mcp/client-config.example.json](mcp/client-config.example.json), replace t
 | `openrouter_list_models` | Search the live OpenRouter catalog |
 | `openrouter_run_model` | Run one approved specialist task |
 | `openrouter_compare_models` | Compare two to four models |
+| `manus_create_task` | Start an approved asynchronous Manus agent task |
+| `manus_get_task` | Read a Manus task's status |
+| `manus_list_task_messages` | Poll a Manus task for progress, results, and files |
+| `manus_stop_task` | Stop a running Manus task |
+| `helios_get_global_context` | Read the durable cross-chat context |
+| `helios_update_global_context` | Update the durable cross-chat context |
 | `helios_get_benchmark_registry` | Inspect evidence and freshness |
 | `helios_select_benchmark_model` | Select an eligible specialist by category |
+| `helios_route_task` | Let Jev pick a task's category, then select its specialist |
+| `helios_decide` | Ask Jev typed choice, score, or yes/no questions about a text |
 | `helios_refresh_benchmarks` | Explicitly run a stale-only or full web refresh |
 | `helios_create_project` | Create a durable project with budgets and controls |
 | `helios_plan_project` | Persist and validate a dependency-safe task plan |
@@ -162,6 +236,11 @@ Copy [mcp/client-config.example.json](mcp/client-config.example.json), replace t
 - `GET /models?search=<query>&limit=<1-200>`
 - `POST /run`
 - `POST /compare`
+- `POST /route`
+- `POST /decide`
+- `GET /providers`
+- `POST /manus/tasks`, `GET /manus/tasks/{task_id}`, `GET /manus/tasks/{task_id}/messages`, `POST /manus/tasks/{task_id}/stop`
+- `GET|POST /v2/global-context`
 - `POST /refresh-models`
 - `GET /benchmarks/status`
 - `GET /benchmarks?category=<category>`
@@ -192,7 +271,6 @@ Run the complete verification suite:
 ```bash
 npm ci
 npm test
-npm run audit:high
 npm run scan:secrets
 npm run audit:prod
 ```

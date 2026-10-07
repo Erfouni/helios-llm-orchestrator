@@ -52,10 +52,12 @@ class HeliosServerTests(unittest.TestCase):
             server.run_model({"model": "provider/model", "prompt": "x", "top_p": -1})
 
     def test_manus_key_can_use_systemd_credential_file(self):
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as handle:
-            handle.write("temporary-test-key\n")
-            handle.flush()
-            with mock.patch.object(server, "MANUS_API_KEY_FILE", handle.name), mock.patch.dict(
+        # A closed file in a temporary directory: Windows cannot reopen an open
+        # NamedTemporaryFile by name, and a systemd credential is never open.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manus_api_key"
+            path.write_text("temporary-test-key\n", encoding="utf-8")
+            with mock.patch.object(server, "MANUS_API_KEY_FILE", str(path)), mock.patch.dict(
                 os.environ, {"MANUS_API_KEY": ""}
             ):
                 self.assertEqual(server.manus_api_key(), "temporary-test-key")
@@ -104,6 +106,12 @@ class HeliosServerTests(unittest.TestCase):
         self.assertFalse(server.strict_bool(None, "only_if_stale"))
         with self.assertRaises(server.GatewayError):
             server.strict_bool("false", "only_if_stale")
+
+    def test_non_ascii_authorization_is_refused_not_a_crash(self):
+        with mock.patch.object(server, "LOCAL_API_KEY", "secret"):
+            self.assertTrue(server.local_request_authorized({"Authorization": "Bearer secret"}))
+            self.assertFalse(server.local_request_authorized({"Authorization": "Bearer sécret"}))
+            self.assertFalse(server.local_request_authorized({}))
 
     def test_non_loopback_host_is_not_the_default(self):
         self.assertIn(server.HOST, {"127.0.0.1", "::1", "localhost"})

@@ -1,0 +1,20 @@
+# Weekly dependency checks. Minor and patch npm updates arrive as one grouped
+# PR; majors come on their own so they can be read before they are merged.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

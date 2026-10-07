@@ -1,10 +1,46 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
 from agent import benchmark_registry
+
+SOURCE = "https://official.example/leaderboard"
+
+
+def search_response(ranking, benchmark_date=None):
+    """A stand-in for OpenRouter's web-search reply with one citation."""
+    extracted = {"benchmark_name": "Official", "ranking": ranking}
+    if benchmark_date is not None:
+        extracted["benchmark_date"] = benchmark_date
+    return {
+        "model": "search/model",
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(extracted),
+                    "annotations": [{"url_citation": {"url": SOURCE}}],
+                }
+            }
+        ],
+    }
+
+
+def ranked(*names):
+    return [
+        {"rank": rank, "model_name": name, "score": 100 - rank, "score_text": "x", "source_url": SOURCE}
+        for rank, name in enumerate(names, start=1)
+    ]
+
+
+def current_entry():
+    return {
+        "selected_model": {"id": "provider/model-1"},
+        "valid_until": "2099-01-01T00:00:00Z",
+        "ranking": [{"model_name": f"Model {n}", "source_url": SOURCE} for n in range(1, 4)],
+    }
 
 
 class BenchmarkRegistryTests(unittest.TestCase):
@@ -295,10 +331,17 @@ class BenchmarkRegistryTests(unittest.TestCase):
             "deepseek-v4-pro-high-20260813", models
         )
         self.assertEqual(deepseek["id"], "deepseek/deepseek-v4-pro-0813")
+        # Run descriptions do not make the ranked model a different one, but a
+        # Pro sibling is not the model the leaderboard ranked.
         gpt = benchmark_registry.resolve_available_model(
             "gpt-5.6-sol-xhigh (codex-harness)", models
         )
-        self.assertEqual(gpt["id"], "openai/gpt-5.6-sol-pro")
+        self.assertIsNone(gpt)
+        models.append({"id": "openai/gpt-5.6-sol", "name": "OpenAI: GPT-5.6 Sol", "created": 0})
+        gpt = benchmark_registry.resolve_available_model(
+            "gpt-5.6-sol-xhigh (codex-harness)", models
+        )
+        self.assertEqual(gpt["id"], "openai/gpt-5.6-sol")
 
     def test_fresh_evidence_is_kept_when_no_openrouter_model_matches(self):
         source = "https://official.example/leaderboard"
@@ -381,6 +424,227 @@ class BenchmarkRegistryTests(unittest.TestCase):
             "Claude-Opus-4-5-20251101 (FC)", models
         )
         self.assertEqual(selected["id"], "anthropic/claude-opus-4.5")
+
+    def test_ranked_name_does_not_resolve_to_a_sibling_model(self):
+        models = [
+            {"id": "openai/gpt-5", "name": "OpenAI: GPT-5", "created": 100},
+            {"id": "openai/gpt-5-nano", "name": "OpenAI: GPT-5 Nano", "created": 300},
+            {"id": "openai/gpt-5-mini", "name": "OpenAI: GPT-5 Mini", "created": 200},
+            {"id": "openai/gpt-5.1", "name": "OpenAI: GPT-5.1", "created": 400},
+            {"id": "google/gemini-3-pro", "name": "Google: Gemini 3 Pro", "created": 100},
+            {"id": "google/gemini-3-pro-image", "name": "Google: Gemini 3 Pro Image", "created": 400},
+        ]
+        resolve = benchmark_registry.resolve_available_model
+        self.assertEqual(resolve("GPT-5", models)["id"], "openai/gpt-5")
+        self.assertEqual(resolve("Gemini 3 Pro", models)["id"], "google/gemini-3-pro")
+
+    def test_names_seen_in_production_resolve_to_the_ranked_model(self):
+        # Each of these mapped to a different model in the live registry.
+        models = [
+            {"id": "openai/gpt-5", "name": "OpenAI: GPT-5", "created": 1},
+            {"id": "openai/gpt-5.5", "name": "OpenAI: GPT-5.5", "created": 5},
+            {"id": "openai/gpt-5.6-luna-pro", "name": "OpenAI: GPT-5.6 Luna Pro", "created": 6},
+            {"id": "openai/o3", "name": "OpenAI: o3", "created": 1},
+            {"id": "openai/o3-pro", "name": "OpenAI: o3 Pro", "created": 2},
+            {"id": "anthropic/claude-opus-5.5", "name": "Anthropic: Claude Opus 5.5", "created": 1},
+            {"id": "perplexity/sonar", "name": "Perplexity: Sonar", "created": 3},
+            {"id": "perplexity/sonar-pro-search", "name": "Perplexity: Sonar Pro Search", "created": 4},
+            {"id": "perplexity/sonar-reasoning-pro", "name": "Perplexity: Sonar Reasoning Pro", "created": 1},
+            {"id": "nvidia/nemotron-3-nano-30b-a3b", "name": "NVIDIA: Nemotron 3 Nano 30B A3B", "created": 1},
+            {"id": "google/gemini-3.1-flash-lite", "name": "Google: Gemini 3.1 Flash Lite", "created": 1},
+        ]
+        resolve = benchmark_registry.resolve_available_model
+        expected = {
+            "GPT-5 (high)": "openai/gpt-5",
+            "o3": "openai/o3",
+            "Claude Opus 5.5 (Adaptive Reasoning, Max Effort, Default Fallback)": "anthropic/claude-opus-5.5",
+            "Perplexity-Sonar-Reasoning-Pro(high)": "perplexity/sonar-reasoning-pro",
+            "NVIDIA Nemotron 3 Nano Omni 30B A3B": None,
+            "gemini-omni-1.1-flash": None,
+        }
+        for name, model_id in expected.items():
+            with self.subTest(name=name):
+                result = resolve(name, models)
+                self.assertEqual(result and result["id"], model_id)
+
+    def test_no_sibling_stands_in_for_a_missing_ranked_model(self):
+        models = [
+            {"id": "openai/gpt-5-mini", "name": "OpenAI: GPT-5 Mini", "created": 200},
+            {"id": "openai/gpt-5-nano", "name": "OpenAI: GPT-5 Nano", "created": 300},
+            {"id": "openai/gpt-5.1", "name": "OpenAI: GPT-5.1", "created": 400},
+        ]
+        self.assertIsNone(benchmark_registry.resolve_available_model("GPT-5", models))
+
+    def test_snapshots_and_leaderboard_decorations_still_resolve(self):
+        resolve = benchmark_registry.resolve_available_model
+        snapshot = {"id": "moonshotai/kimi-k2-0905", "name": "MoonshotAI: Kimi K2 0905", "created": 2}
+        self.assertEqual(resolve("Kimi K2", [snapshot])["id"], "moonshotai/kimi-k2-0905")
+        plain = {"id": "moonshotai/kimi-k2", "name": "MoonshotAI: Kimi K2", "created": 1}
+        self.assertEqual(resolve("Kimi K2", [snapshot, plain])["id"], "moonshotai/kimi-k2")
+        opus = {"id": "anthropic/claude-opus-4.1", "name": "Anthropic: Claude Opus 4.1", "created": 1}
+        self.assertEqual(resolve("Claude Opus 4.1 (Thinking)", [opus])["id"], "anthropic/claude-opus-4.1")
+        self.assertEqual(resolve("Claude 4.1 Opus", [opus])["id"], "anthropic/claude-opus-4.1")
+
+    def test_written_ranks_do_not_fail_the_category(self):
+        self.assertEqual(benchmark_registry._rank("1st", 5), 1)
+        self.assertEqual(benchmark_registry._rank("#2", 5), 2)
+        self.assertEqual(benchmark_registry._rank(3, 5), 3)
+        for value in (None, True, "n/a"):
+            self.assertEqual(benchmark_registry._rank(value, 5), 5)
+
+        ranking = ranked("Model 1", "Model 2", "Model 3")
+        for item, text in zip(ranking, ("1st", "2nd", "3rd")):
+            item["rank"] = text
+        models = [{"id": f"provider/model-{n}", "name": f"Model {n}", "created": n} for n in range(1, 4)]
+        result = benchmark_registry._refresh_category(
+            "coding",
+            {"query": "coding"},
+            {"min_ranked_models": 3},
+            lambda *_a, **_k: search_response(ranking),
+            models,
+            "2026-07-22",
+        )
+        self.assertEqual([item["rank"] for item in result["ranking"]], [1, 2, 3])
+
+    def test_old_evidence_is_rejected_at_refresh(self):
+        models = [{"id": f"provider/model-{n}", "name": f"Model {n}", "created": n} for n in range(1, 4)]
+        ranking = ranked("Model 1", "Model 2", "Model 3")
+        config = {"min_ranked_models": 3, "max_evidence_age_days": 180}
+
+        def refresh(benchmark_date):
+            return benchmark_registry._refresh_category(
+                "reasoning",
+                {"query": "reasoning"},
+                config,
+                lambda *_a, **_k: search_response(ranking, benchmark_date),
+                models,
+                "2026-07-22",
+            )
+
+        with self.assertRaises(benchmark_registry.BenchmarkRegistryError) as error:
+            refresh("2024-01-15")
+        self.assertEqual(error.exception.status, 422)
+        self.assertEqual(error.exception.details["benchmark_date"], "2024-01-15")
+        # Recent, month-only, and unknown dates are accepted.
+        for benchmark_date in ("2026-07-01", "2026-06", None):
+            self.assertEqual(refresh(benchmark_date)["selected_model"]["id"], "provider/model-1")
+
+
+class RegistryRefreshTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.config_path = self.root / "sources.json"
+        self.registry_path = self.root / "registry.json"
+        self.prompts = []
+        self.models = [
+            {"id": f"provider/model-{n}", "name": f"Model {n}", "created": n} for n in range(1, 4)
+        ]
+
+    def write(self, path, value):
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+    def request(self, _method, _path, payload, **_kwargs):
+        self.prompts.append(payload["messages"][-1]["content"])
+        return search_response(ranked("Model 1", "Model 2", "Model 3"))
+
+    def refresh(self, only_if_stale):
+        return benchmark_registry.refresh_registry(
+            self.request,
+            self.models,
+            only_if_stale=only_if_stale,
+            config_path=self.config_path,
+            registry_path=self.registry_path,
+        )
+
+    def refreshed_categories(self):
+        return sorted(
+            line.split(": ", 1)[1]
+            for prompt in self.prompts
+            for line in prompt.splitlines()
+            if line.startswith("Category: ")
+        )
+
+    def test_removed_category_neither_stays_stale_nor_survives_a_refresh(self):
+        self.write(self.config_path, {"categories": {"coding": {"query": "coding"}}})
+        retired = dict(current_entry(), valid_until="2020-01-01T00:00:00Z")
+        self.write(
+            self.registry_path,
+            {"valid_until": "2099-01-01T00:00:00Z", "categories": {"coding": current_entry(), "retired": retired}},
+        )
+
+        status = benchmark_registry.registry_status(self.registry_path, self.config_path)
+        self.assertFalse(status["stale"])
+        self.assertEqual(status["category_count"], 1)
+        skipped = self.refresh(only_if_stale=True)
+        self.assertTrue(skipped["skipped"])
+        self.assertEqual(self.prompts, [], "a fresh registry must not pay for searches")
+
+        refreshed = self.refresh(only_if_stale=False)
+        self.assertEqual(refreshed["dropped_categories"], ["retired"])
+        published = benchmark_registry.load_registry(self.registry_path)
+        self.assertEqual(sorted(published["categories"]), ["coding"])
+
+    def test_stale_only_refresh_pays_only_for_due_categories(self):
+        self.write(
+            self.config_path,
+            {
+                "categories": {
+                    "coding": {"query": "coding"},
+                    "frontend": {"query": "frontend"},
+                    "mathematics": {"query": "mathematics"},
+                    "vision": {"query": "vision", "enabled": False},
+                }
+            },
+        )
+        expired = dict(current_entry(), valid_until="2020-01-01T00:00:00Z")
+        self.write(
+            self.registry_path,
+            {"valid_until": "2020-01-01T00:00:00Z", "categories": {"coding": current_entry(), "frontend": expired}},
+        )
+        self.assertEqual(
+            benchmark_registry.registry_status(self.registry_path, self.config_path)["missing_categories"],
+            ["mathematics"],
+        )
+
+        refreshed = self.refresh(only_if_stale=True)
+        self.assertEqual(refreshed["refreshed_categories"], ["frontend", "mathematics"])
+        self.assertEqual(self.refreshed_categories(), ["frontend", "mathematics"])
+        published = benchmark_registry.load_registry(self.registry_path)
+        self.assertEqual(published["categories"]["coding"], current_entry())
+        self.assertEqual(published["status"], "current")
+
+    def test_stale_only_refresh_renews_evidence_about_to_expire(self):
+        # Evidence lasts 8 days and the refresh runs every 7: without looking
+        # ahead, each weekly run skipped categories valid for one more day, and
+        # they stayed stale for the next 6.
+        self.write(self.config_path, {"categories": {"coding": {"query": "coding"}, "frontend": {"query": "frontend"}}})
+        tomorrow = benchmark_registry.isoformat(benchmark_registry.utc_now() + benchmark_registry.timedelta(days=1))
+        self.write(
+            self.registry_path,
+            {
+                "valid_until": tomorrow,
+                "categories": {"coding": current_entry(), "frontend": dict(current_entry(), valid_until=tomorrow)},
+            },
+        )
+        refreshed = self.refresh(only_if_stale=True)
+        self.assertEqual(refreshed["refreshed_categories"], ["frontend"])
+
+    def test_refresh_is_refused_while_another_process_holds_the_lock(self):
+        self.write(self.config_path, {"categories": {"coding": {"query": "coding"}}})
+        lock_path = self.registry_path.with_name(self.registry_path.name + ".lock")
+        descriptor = os.open(str(lock_path), os.O_RDWR | os.O_CREAT)
+        try:
+            benchmark_registry._lock_file(descriptor)
+            with self.assertRaises(benchmark_registry.BenchmarkRegistryError) as error:
+                self.refresh(only_if_stale=False)
+            self.assertEqual(error.exception.status, 409)
+            self.assertEqual(self.prompts, [])
+            benchmark_registry._unlock_file(descriptor)
+        finally:
+            os.close(descriptor)
+        self.assertFalse(self.refresh(only_if_stale=False)["skipped"])
 
 
 if __name__ == "__main__":

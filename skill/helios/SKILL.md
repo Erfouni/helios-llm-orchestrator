@@ -44,6 +44,18 @@ Use the OpenRouter compare endpoint/tool with two to four models and a common
 prompt. Keep each answer attributable to its confirmed model. Use comparisons
 only after the user approves the paid execution.
 
+## Route and check with Jev
+
+Jev is a decision model reached through the same OpenRouter key. It returns
+typed answers with probabilities, not prose, and costs a fraction of a cent per
+call.
+
+- `helios_route_task` picks a task's benchmark category and returns that
+  category's specialist in `selection`. If `needs_confirmation` is true, ask the
+  user which category fits; do not pick one yourself.
+- `helios_decide` asks typed questions about a text: `noul` (probability that a
+  condition holds), `score` (2-10 ordered levels), or `choice` (one option).
+
 ## PROJECT
 
 ### 1. Create durable project memory
@@ -60,6 +72,9 @@ Use `helios_create_project` with:
 Decompose the work into atomic tasks. Each task needs a unique key, workstream,
 description, dependencies, inputs, expected outputs, acceptance criteria, risk,
 approval requirement, and preferred models/tools. Keep the graph acyclic.
+Choose each model task's specialist with `helios_route_task`, or with
+`helios_select_benchmark_model` when its category is already known, and record
+the returned model and benchmark evidence.
 
 Use `helios_plan_project` with the current project version and an idempotency
 key. Show the exact plan before starting paid work. Use
@@ -77,8 +92,11 @@ key. Show the exact plan before starting paid work. Use
 ### 4. Verify and approve
 
 Independently check material outputs against every acceptance criterion. Use a
-different model family or a deterministic tool when practical. Persist the
-decision with `helios_review_task`.
+different model family or a deterministic tool when practical. Before paying
+for that review, `helios_decide` with one `noul` question per criterion may send
+a clearly failing output (answers well below 0.5) back for revision; a passing
+Jev check does not replace the review. Persist the decision with
+`helios_review_task`.
 
 High-risk work must remain at a human approval gate. Fabricated values,
 unsupported claims, missing evidence, or failed deterministic checks require

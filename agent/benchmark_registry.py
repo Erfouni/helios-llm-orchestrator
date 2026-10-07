@@ -15,11 +15,21 @@ import json
 import os
 import re
 import threading
+from collections import Counter
+import urllib.error
 import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 
 
 MODULE_DIR = Path(__file__).resolve().parent
@@ -129,6 +139,57 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
     os.replace(str(temporary), str(path))
 
 
+def _lock_file(descriptor: int) -> None:
+    """Take an exclusive, non-blocking OS lock; the OS drops it if the process dies."""
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if fcntl is not None:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    else:
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+
+
+def _unlock_file(descriptor: int) -> None:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if fcntl is not None:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    else:
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def _refresh_guard(registry_path: Path) -> Iterator[None]:
+    """Allow one refresh at a time across threads and processes.
+
+    The scheduled refresh runs scripts/refresh-benchmarks.py in its own process
+    while the agent can be refreshing for an MCP caller. Both would pay for the
+    same searches and write the same temporary file.
+    """
+    if not _refresh_lock.acquire(blocking=False):
+        raise BenchmarkRegistryError("A benchmark refresh is already running", 409)
+    try:
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(
+            str(registry_path.with_name(registry_path.name + ".lock")),
+            os.O_RDWR | os.O_CREAT,
+            0o600,
+        )
+        try:
+            try:
+                _lock_file(descriptor)
+            except OSError as exc:
+                raise BenchmarkRegistryError(
+                    "A benchmark refresh is already running", 409
+                ) from exc
+            try:
+                yield
+            finally:
+                _unlock_file(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        _refresh_lock.release()
+
+
 def _is_stale(valid_until: Any, now: datetime | None = None) -> bool:
     if not isinstance(valid_until, str):
         return True
@@ -144,6 +205,31 @@ def normalize_category(value: str) -> str:
 
 def _category_valid_until(result: dict[str, Any], registry: dict[str, Any]) -> Any:
     return result.get("valid_until") or registry.get("valid_until")
+
+
+def _enabled_categories(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(category): spec
+        for category, spec in config.get("categories", {}).items()
+        if isinstance(spec, dict) and spec.get("enabled", True)
+    }
+
+
+def _evidence_date(value: Any) -> date | None:
+    """Parse YYYY-MM-DD or YYYY-MM; anything else is an unknown date."""
+    match = re.match(r"(\d{4})-(\d{2})(?:-(\d{2}))?", str(value or "").strip())
+    if not match:
+        return None
+    try:
+        return date(int(match[1]), int(match[2]), int(match[3] or 1))
+    except ValueError:
+        return None
+
+
+def _rank(value: Any, fallback: int) -> int:
+    # The search model may write "1st" or "#2" instead of a number.
+    match = None if isinstance(value, bool) else re.match(r"\s*#?(\d+)", str(value))
+    return int(match[1]) if match else fallback
 
 
 def _result_quality_error(
@@ -182,17 +268,27 @@ def _result_quality_error(
     return None
 
 
-def registry_status(path: Path = REGISTRY_PATH) -> dict[str, Any]:
+def registry_status(
+    path: Path = REGISTRY_PATH, config_path: Path = CONFIG_PATH
+) -> dict[str, Any]:
     registry = load_registry(path)
     valid_until = registry.get("valid_until")
     now = utc_now()
     try:
-        config = load_config()
+        config = load_config(config_path)
     except BenchmarkRegistryError:
         config = None
+    categories = registry.get("categories", {})
+    missing_categories: list[str] = []
+    if config is not None:
+        # A category removed from or disabled in the config is never refreshed
+        # again, so its evidence must not keep the whole registry stale.
+        enabled = _enabled_categories(config)
+        categories = {name: result for name, result in categories.items() if name in enabled}
+        missing_categories = sorted(set(enabled) - set(categories))
     low_quality_categories = sorted(
         category
-        for category, result in registry.get("categories", {}).items()
+        for category, result in categories.items()
         if not isinstance(result, dict)
         or (
             config is not None
@@ -201,12 +297,12 @@ def registry_status(path: Path = REGISTRY_PATH) -> dict[str, Any]:
     )
     stale_categories = sorted(
         category
-        for category, result in registry.get("categories", {}).items()
+        for category, result in categories.items()
         if not isinstance(result, dict)
         or _is_stale(_category_valid_until(result, registry), now)
     )
     stale = (
-        not registry.get("categories")
+        not categories
         or bool(stale_categories)
         or bool(low_quality_categories)
     )
@@ -216,9 +312,10 @@ def registry_status(path: Path = REGISTRY_PATH) -> dict[str, Any]:
         "valid_until": valid_until,
         "stale": stale,
         "registry_hash": registry.get("registry_hash"),
-        "category_count": len(registry.get("categories", {})),
+        "category_count": len(categories),
         "stale_categories": stale_categories,
         "low_quality_categories": low_quality_categories,
+        "missing_categories": missing_categories,
         "failure_count": len(registry.get("failures", [])),
     }
 
@@ -228,58 +325,107 @@ def _normalize(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", value))
 
 
-def _tokens(value: str) -> set[str]:
-    ignored = {
-        "ai",
-        "model",
-        "preview",
-        "latest",
-        "instruct",
-        "chat",
-        "anthropic",
-        "google",
-        "openai",
-        "moonshotai",
-        "z",
-        "max",
-        "high",
-        "xhigh",
-        "medium",
-        "low",
-        "reasoning",
-        "grounding",
-        "codex",
-        "harness",
-        "fc",
-        "prompt",
-    }
-    result: set[str] = set()
+_IGNORED_TOKENS = {
+    "ai",
+    "model",
+    "preview",
+    "latest",
+    "instruct",
+    "it",
+    "chat",
+    "anthropic",
+    "google",
+    "openai",
+    "moonshotai",
+    "z",
+}
+# Words leaderboards add to say how a model was run ("GPT-5 (high)", "(FC)").
+# They do not name the model, but in an OpenRouter slug some of them do name a
+# different one (qwen3-max, gpt-5-codex), so sibling checks keep them.
+_RUN_ANNOTATION_TOKENS = {
+    "max",
+    "high",
+    "xhigh",
+    "medium",
+    "low",
+    "reasoning",
+    "grounding",
+    "codex",
+    "harness",
+    "fc",
+    "prompt",
+}
+
+
+# A ranked name may also carry these without naming a different model: run
+# descriptions, "thinking", "Non-reasoning", and a vendor next to the model.
+_DROPPABLE_TOKENS = _IGNORED_TOKENS | _RUN_ANNOTATION_TOKENS | {
+    "thinking",
+    "non",
+    "alibaba",
+    "meta",
+    "xai",
+    "microsoft",
+    "amazon",
+}
+
+
+def _token_list(value: str) -> list[str]:
+    result: list[str] = []
     for token in _normalize(value).split():
-        if token in ignored:
+        if token in _IGNORED_TOKENS:
             continue
         # Leaderboards often append evaluation/release dates that are absent from
         # the canonical API model slug. Treat YYYYMMDD as metadata, not identity.
         if re.fullmatch(r"20\d{6}", token):
             continue
-        result.add(token)
+        result.append(token)
     return result
 
 
+def _is_number(token: str) -> bool:
+    return any(ch.isdigit() for ch in token)
+
+
+def _is_snapshot_token(token: str) -> bool:
+    # 0905, 2507, 20250514: a dated release of the same model.
+    return token.isdigit() and len(token) >= 4
+
+
 def resolve_available_model(name: str, models: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Conservatively map a public leaderboard name to an OpenRouter model."""
+    """Conservatively map a public leaderboard name to an OpenRouter model.
+
+    A sibling must never stand in for the ranked model. Every word and version
+    number of the ranked name, apart from parenthesized notes and run
+    descriptions, must be in the candidate, and the candidate may add nothing
+    but a dated snapshot suffix. So "GPT-5 (high)" is gpt-5, never gpt-5.5,
+    gpt-5-nano or gpt-5-image, and a name with no such model stays unmatched.
+    Version numbers are counted, not just looked up, because 5.5 is not 5.
+    """
     requested = _normalize(name)
     if not requested:
         return None
-    exact: list[dict[str, Any]] = []
-    scored: list[tuple[float, int, dict[str, Any]]] = []
-    requested_tokens = _tokens(name)
-    requested_numbers = {token for token in requested_tokens if any(ch.isdigit() for ch in token)}
-
+    every = Counter(_token_list(name))
+    core = [
+        token
+        for token in _token_list(re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", name))
+        if token not in _DROPPABLE_TOKENS
+    ]
+    if not core:
+        return None
+    core_words = {token for token in core if not _is_number(token)}
+    core_numbers = Counter(token for token in core if _is_number(token))
     specialized_markers = {"image", "audio", "video", "embedding", "customtools", "batch"}
+    exact: list[dict[str, Any]] = []
+    scored: list[tuple[int, int, int, dict[str, Any]]] = []
 
     for item in models:
         model_id = str(item.get("id", ""))
         model_name = str(item.get("name", ""))
+        # OpenRouter ids are "provider/slug" and names "Provider: Name", so a
+        # bare leaderboard name only ever equals the part without the provider.
+        slug = model_id.split("/", 1)[-1]
+        short_name = model_name.split(": ", 1)[-1]
         haystack = _normalize(model_id + " " + model_name)
         candidate_all_tokens = set(haystack.split())
         requested_all_tokens = set(requested.split())
@@ -288,24 +434,31 @@ def resolve_available_model(name: str, models: list[dict[str, Any]]) -> dict[str
             for marker in specialized_markers
         ):
             continue
-        if requested in {_normalize(model_id), _normalize(model_name)}:
+        if requested in {_normalize(value) for value in (model_id, model_name, slug, short_name)}:
             exact.append(item)
             continue
-        candidate_tokens = _tokens(model_id + " " + model_name)
-        if not requested_tokens or not candidate_tokens:
+        if not core_words <= set(_token_list(model_id + " " + model_name)):
             continue
-        if requested_numbers and not requested_numbers.issubset(candidate_tokens):
-            continue
-        overlap = len(requested_tokens & candidate_tokens) / len(requested_tokens)
-        containment = 0.25 if requested in haystack else 0.0
-        score = overlap + containment
-        if score >= 0.67:
-            scored.append((score, int(item.get("created") or 0), item))
+        best: tuple[int, int] | None = None
+        for label in (slug, short_name):
+            tokens = Counter(_token_list(label))
+            if core_numbers - Counter({t: n for t, n in tokens.items() if _is_number(t)}):
+                continue
+            extras = tokens - every
+            if not all(_is_snapshot_token(token) for token in extras):
+                continue
+            # Prefer the candidate that carries more of the ranked name, so
+            # "Sonar Reasoning (high)" picks sonar-reasoning over sonar.
+            key = (sum((tokens & every).values()), -sum(extras.values()))
+            if best is None or key > best:
+                best = key
+        if best is not None:
+            scored.append((*best, int(item.get("created") or 0), item))
 
     candidates = exact
     if not candidates and scored:
-        scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
-        candidates = [scored[0][2]]
+        scored.sort(key=lambda row: row[:3], reverse=True)
+        candidates = [scored[0][3]]
     if not candidates:
         return None
     candidates.sort(key=lambda item: int(item.get("created") or 0), reverse=True)
@@ -403,7 +556,11 @@ def _safe_source_url(
 
 
 def _build_prompt(
-    category: str, spec: dict[str, Any], today: str, min_ranked_models: int
+    category: str,
+    spec: dict[str, Any],
+    today: str,
+    min_ranked_models: int,
+    max_evidence_age_days: int,
 ) -> str:
     benchmark_hints = ", ".join(str(item) for item in spec.get("benchmark_hints", []))
     allowed_domains = ", ".join(str(item) for item in spec.get("allowed_domains", []))
@@ -443,6 +600,8 @@ Rules:
   leaderboard and preserve the source's ranking. Use one leaderboard URL for all rows
   whenever that page contains the compared models.
 - Every ranked item must contain a source URL that was actually returned and cited by web search.
+- Use the latest edition. Results published more than {max_evidence_age_days} days
+  before today are rejected; report the publication or last-update date.
 - Do not infer, average, estimate, or fabricate a score.
 - If reliable comparable results are unavailable, return an empty ranking.
 """
@@ -603,6 +762,7 @@ def _refresh_category(
     excluded = config.get("exclude_domains")
     if not allowed and isinstance(excluded, list) and excluded:
         plugin["exclude_domains"] = [str(item) for item in excluded]
+    max_age_days = max(30, min(int(config.get("max_evidence_age_days", 180)), 730))
 
     payload = {
         "model": str(config.get("search_model", "openrouter/auto")),
@@ -618,6 +778,7 @@ def _refresh_category(
                     spec,
                     today,
                     max(2, min(int(config.get("min_ranked_models", 3)), 5)),
+                    max_age_days,
                 ),
             },
         ],
@@ -667,6 +828,19 @@ def _refresh_category(
             repair_choices[0].get("message", {}) if repair_choices else {}
         )
         extracted = _extract_json(repair_message.get("content"))
+    # Freshness of the registry is the date it was searched; this keeps an old
+    # paper or a past leaderboard edition from passing as this week's evidence.
+    evidence_date = _evidence_date(extracted.get("benchmark_date"))
+    if evidence_date and (date.fromisoformat(today) - evidence_date).days > max_age_days:
+        raise BenchmarkRegistryError(
+            "Public evidence is older than the configured maximum age",
+            422,
+            {
+                "category": category,
+                "benchmark_date": evidence_date.isoformat(),
+                "max_evidence_age_days": max_age_days,
+            },
+        )
     citations = _citation_urls(message)
     blocked_domains = {str(item).lower() for item in config.get("exclude_domains", [])}
     allowed_domains = {str(item).lower() for item in allowed}
@@ -687,7 +861,7 @@ def _refresh_category(
         available = resolve_available_model(model_name, models)
         ranking.append(
             {
-                "rank": int(raw.get("rank") or position),
+                "rank": _rank(raw.get("rank"), position),
                 "model_name": model_name,
                 "score": raw.get("score"),
                 "score_text": str(raw.get("score_text", ""))[:200],
@@ -746,6 +920,24 @@ def _refresh_category(
     }
 
 
+def _needs_refresh(
+    category: str, registry: dict[str, Any], config: dict[str, Any], now: datetime
+) -> bool:
+    """True when a category's evidence is missing, expiring, or below the quality gates.
+
+    Evidence lasts valid_days (8) and the refresh runs weekly, so a category
+    that is still valid for a day at one run would otherwise expire before the
+    next and stay stale for most of a week. Renew it refresh_ahead_days early.
+    """
+    result = registry.get("categories", {}).get(category)
+    ahead = timedelta(days=max(0, min(int(config.get("refresh_ahead_days", 2)), 7)))
+    return (
+        not isinstance(result, dict)
+        or _is_stale(_category_valid_until(result, registry), now + ahead)
+        or _result_quality_error(category, result, config) is not None
+    )
+
+
 def refresh_registry(
     openrouter_request: Callable[..., dict[str, Any]],
     models: list[dict[str, Any]],
@@ -754,34 +946,32 @@ def refresh_registry(
     config_path: Path = CONFIG_PATH,
     registry_path: Path = REGISTRY_PATH,
 ) -> dict[str, Any]:
-    if only_if_stale and not registry_status(registry_path)["stale"]:
-        return {"ok": True, "skipped": True, **registry_status(registry_path)}
-    if not _refresh_lock.acquire(blocking=False):
-        raise BenchmarkRegistryError("A benchmark refresh is already running", 409)
-    try:
+    with _refresh_guard(registry_path):
         config = load_config(config_path)
         previous = load_registry(registry_path)
         now = utc_now()
         today = now.date().isoformat()
-        categories = config.get("categories", {})
+        enabled = _enabled_categories(config)
+        if only_if_stale:
+            # Only pay for the categories that need it; fresh evidence is kept.
+            targets = [
+                category
+                for category in enabled
+                if _needs_refresh(category, previous, config, now)
+            ]
+            if not targets:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    **registry_status(registry_path, config_path),
+                }
+        else:
+            targets = list(enabled)
         max_parallel = max(1, min(int(config.get("max_parallel", 3)), 6))
         refreshed: dict[str, Any] = {}
         failures: list[dict[str, Any]] = []
-        configured_names = {
-            str(name) for name, spec in categories.items()
-            if isinstance(spec, dict) and spec.get("enabled", True)
-        }
-        if only_if_stale:
-            before = registry_status(registry_path)
-            target_names = (
-                set(before.get("stale_categories", []))
-                | set(before.get("low_quality_categories", []))
-                | (configured_names - set(previous.get("categories", {})))
-            )
-        else:
-            target_names = configured_names
-
-        def submit_refresh(executor: ThreadPoolExecutor, category: str, spec: dict[str, Any]):
+        def submit_refresh(executor: ThreadPoolExecutor, category: str):
+            spec = enabled[category]
             if spec.get("source_adapter") == "official_csv":
                 return executor.submit(
                     _refresh_official_csv_category, category, spec, config, models
@@ -791,13 +981,7 @@ def refresh_registry(
             )
 
         with ThreadPoolExecutor(max_workers=max_parallel) as executor:
-            futures = {
-                submit_refresh(executor, str(category), spec): str(category)
-                for category, spec in categories.items()
-                if isinstance(spec, dict)
-                and spec.get("enabled", True)
-                and str(category) in target_names
-            }
+            futures = {submit_refresh(executor, category): category for category in targets}
             for future in as_completed(futures):
                 category = futures[future]
                 try:
@@ -809,18 +993,25 @@ def refresh_registry(
                     )
 
         if not refreshed:
-            if not failures and not target_names:
-                return {"ok": True, "skipped": True, **registry_status(registry_path)}
+            if not failures and not targets:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    **registry_status(registry_path, config_path),
+                }
             raise BenchmarkRegistryError(
                 "Benchmark refresh produced no valid categories; previous registry was preserved",
                 502,
-                {"failures": failures, "attempted_categories": sorted(target_names)},
+                {"failures": failures, "attempted_categories": sorted(targets)},
             )
 
         valid_days = max(1, min(int(config.get("valid_days", 8)), 31))
         previous_valid_until = previous.get("valid_until")
         merged_categories = {}
+        dropped_categories = sorted(set(previous.get("categories", {})) - set(enabled))
         for name, result in previous.get("categories", {}).items():
+            if name not in enabled:
+                continue
             if isinstance(result, dict):
                 migrated = dict(result)
                 migrated.setdefault("valid_until", previous_valid_until)
@@ -876,15 +1067,14 @@ def refresh_registry(
             "updated_at": value["updated_at"],
             "valid_until": value["valid_until"],
             "registry_hash": value["registry_hash"],
-            "attempted_categories": sorted(target_names),
+            "attempted_categories": sorted(targets),
             "refreshed_categories": sorted(refreshed),
             "preserved_category_count": len(merged_categories) - len(refreshed),
+            "dropped_categories": dropped_categories,
             "failures": failures,
             "registry_path": str(registry_path),
             "history_path": str(history_path),
         }
-    finally:
-        _refresh_lock.release()
 
 
 def registry_view(category: str | None = None, path: Path = REGISTRY_PATH) -> dict[str, Any]:

@@ -59,7 +59,9 @@ $RefreshArguments = "-NoProfile -ExecutionPolicy Bypass -File $quote$RefreshScri
 
 $principalId = "$env:USERDOMAIN\$env:USERNAME"
 $principal = New-ScheduledTaskPrincipal -UserId $principalId -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+# -StartWhenAvailable: a laptop is usually asleep or off at Monday 03:00. Without
+# it the weekly refresh is skipped, and after valid_days every selection is refused.
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
 $agentAction = New-ScheduledTaskAction -Execute $PowerShell -Argument $AgentArguments -WorkingDirectory $ProjectRoot
 $agentTrigger = New-ScheduledTaskTrigger -AtLogOn -User $principalId

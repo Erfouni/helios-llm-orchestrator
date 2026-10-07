@@ -11,7 +11,7 @@ The gateway also accepts `OPENROUTER_API_KEY` from the process environment for n
 
 ## Network boundary
 
-The gateway rejects any configured bind host other than `127.0.0.1`, `::1`, or `localhost`. Do not expose port 3188 through router port forwarding, a public reverse proxy, or an unauthenticated tunnel.
+The gateway rejects any configured bind host other than `127.0.0.1`, `::1`, or `localhost`. Do not expose port 3188 through router port forwarding, a public reverse proxy, or an unauthenticated tunnel. Requests must carry a loopback `Host` header (`127.0.0.1`, `localhost` or `[::1]`, any port), and POST bodies must be sent as `application/json`, so a web page open in the same browser cannot drive the paid routes through DNS rebinding or a cross-site form post.
 
 For defense in depth, set `HELIOS_LOCAL_API_KEY` in both the HTTP agent and MCP process. This secret is optional for a loopback-only setup and must not be committed.
 
