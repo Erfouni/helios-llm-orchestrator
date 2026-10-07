@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "selection_policy": "public_web_benchmark_only",
-  "search_model": "openrouter/auto",
+  "search_model": "google/gemini-3.7-flash",
   "search_engine": "exa",
-  "max_results": 8,
-  "max_output_tokens": 2500,
+  "max_results": 12,
+  "max_output_tokens": 3500,
   "max_parallel": 3,
   "valid_days": 8,
   "min_ranked_models": 3,
@@ -34,64 +34,137 @@
   },
   "categories": {
     "reasoning": {
-      "query": "latest public frontier AI reasoning model benchmark leaderboard",
-      "benchmark_hints": ["GPQA Diamond", "ARC-AGI-2", "Humanity's Last Exam"],
-      "allowed_domains": ["arcprize.org", "openai.com", "arxiv.org", "kaggle.com"]
+      "query": "current ARC-AGI-2 verified frontier model leaderboard top model scores",
+      "benchmark_hints": [
+        "ARC-AGI-2 Verified Leaderboard"
+      ],
+      "allowed_domains": [
+        "arcprize.org"
+      ]
     },
     "coding": {
-      "query": "latest public coding and software engineering AI model benchmark leaderboard",
-      "benchmark_hints": ["SWE-bench Verified", "LiveCodeBench"],
-      "allowed_domains": ["swebench.com", "livecodebench.github.io", "openai.com"]
+      "query": "current official SWE-bench Verified leaderboard top coding models",
+      "benchmark_hints": [
+        "SWE-bench Verified",
+        "LiveCodeBench"
+      ],
+      "allowed_domains": [
+        "swebench.com",
+        "livecodebench.github.io",
+        "artificialanalysis.ai"
+      ]
     },
     "frontend": {
-      "query": "latest public frontend and web development AI model benchmark leaderboard",
-      "benchmark_hints": ["WebDev Arena", "Design2Code"],
-      "allowed_domains": ["arena.ai"]
+      "query": "current Code Arena WebDev Frontend leaderboard top models",
+      "benchmark_hints": [
+        "Code Arena WebDev Frontend"
+      ],
+      "allowed_domains": [
+        "arena.ai"
+      ]
     },
     "agentic_tool_use": {
-      "query": "latest public AI agent tool-use benchmark leaderboard",
-      "benchmark_hints": ["BFCL", "TAU-bench", "ToolBench"],
-      "allowed_domains": ["gorilla.cs.berkeley.edu", "sky.cs.berkeley.edu", "proceedings.mlr.press"]
+      "query": "current Berkeley Function Calling Leaderboard BFCL V4 top models overall accuracy",
+      "benchmark_hints": [
+        "BFCL V4"
+      ],
+      "allowed_domains": [
+        "gorilla.cs.berkeley.edu"
+      ],
+      "source_adapter": "official_csv",
+      "benchmark_name": "Berkeley Function Calling Leaderboard (BFCL) V4",
+      "data_url": "https://gorilla.cs.berkeley.edu/data_overall.csv",
+      "source_url": "https://gorilla.cs.berkeley.edu/leaderboard.html",
+      "rank_column": "Rank",
+      "model_column": "Model",
+      "score_column": "Overall Acc",
+      "date_regex": "Last Updated:\\s*(\\d{4}-\\d{2}-\\d{2})",
+      "notes": "Directly fetched from the official BFCL leaderboard CSV used by the UC Berkeley/Gorilla leaderboard page."
     },
     "web_research": {
-      "query": "latest public AI web research and deep research benchmark leaderboard",
-      "benchmark_hints": ["BrowseComp", "DeepResearch Bench", "GAIA"],
-      "allowed_domains": ["openai.com", "deepresearch-bench.github.io", "xbench.org"]
+      "query": "DeepResearch Bench leaderboard LLM with Search Tools top models by RACE overall score",
+      "benchmark_hints": [
+        "DeepResearch Bench RACE"
+      ],
+      "allowed_domains": [
+        "deepresearch-bench.github.io"
+      ]
     },
     "long_context": {
       "query": "latest public long-context language model benchmark leaderboard",
-      "benchmark_hints": ["LongBench v2", "RULER"],
-      "allowed_domains": ["longbench2.github.io", "arxiv.org", "aclanthology.org"]
+      "benchmark_hints": [
+        "LongBench v2",
+        "RULER"
+      ],
+      "allowed_domains": [
+        "longbench2.github.io",
+        "arxiv.org",
+        "aclanthology.org"
+      ]
     },
     "mathematics": {
       "query": "latest public mathematics reasoning AI model benchmark leaderboard",
-      "benchmark_hints": ["AIME", "MATH-500"],
-      "allowed_domains": ["matharena.ai", "artificialanalysis.ai"]
+      "benchmark_hints": [
+        "AIME",
+        "MATH-500"
+      ],
+      "allowed_domains": [
+        "matharena.ai",
+        "artificialanalysis.ai"
+      ]
     },
     "vision": {
       "query": "latest public multimodal image understanding model benchmark leaderboard",
-      "benchmark_hints": ["MMMU-Pro", "MMBench"],
-      "allowed_domains": ["mmmu-benchmark.github.io", "artificialanalysis.ai"]
+      "benchmark_hints": [
+        "MMMU-Pro",
+        "MMBench"
+      ],
+      "allowed_domains": [
+        "mmmu-benchmark.github.io",
+        "artificialanalysis.ai"
+      ]
     },
     "ocr": {
       "query": "latest public OCR vision-language model benchmark leaderboard",
-      "benchmark_hints": ["OCRBench v2", "OCRBench"],
-      "allowed_domains": ["99franklin.github.io", "huggingface.co"]
+      "benchmark_hints": [
+        "OCRBench v2",
+        "OCRBench"
+      ],
+      "allowed_domains": [
+        "99franklin.github.io",
+        "huggingface.co"
+      ]
     },
     "image_generation": {
       "query": "latest public text-to-image generation model leaderboard",
-      "benchmark_hints": ["Artificial Analysis Image Arena", "GenAI-Bench"],
-      "allowed_domains": ["arena.ai", "artificialanalysis.ai"]
+      "benchmark_hints": [
+        "Artificial Analysis Image Arena",
+        "GenAI-Bench"
+      ],
+      "allowed_domains": [
+        "arena.ai",
+        "artificialanalysis.ai"
+      ]
     },
     "video_generation": {
       "query": "latest public AI text-to-video generation model leaderboard",
-      "benchmark_hints": ["Artificial Analysis Video Arena", "VBench"],
-      "allowed_domains": ["arena.ai", "artificialanalysis.ai"]
+      "benchmark_hints": [
+        "Artificial Analysis Video Arena",
+        "VBench"
+      ],
+      "allowed_domains": [
+        "arena.ai",
+        "artificialanalysis.ai"
+      ]
     },
     "multilingual": {
-      "query": "latest public multilingual language model benchmark leaderboard including Persian",
-      "benchmark_hints": ["Global-MMLU", "MMLU-ProX", "Persian language benchmark"],
-      "allowed_domains": ["mmluprox.github.io", "cohere.com", "artificialanalysis.ai", "kaggle.com"]
+      "query": "current Global-MMLU-Lite multilingual benchmark leaderboard top models average across languages",
+      "benchmark_hints": [
+        "Global-MMLU-Lite"
+      ],
+      "allowed_domains": [
+        "artificialanalysis.ai"
+      ]
     }
   }
 }

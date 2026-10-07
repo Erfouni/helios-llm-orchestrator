@@ -1,0 +1,30 @@
+[Unit]
+Description=Back up Helios SQLite project memory
+After=helios.service
+
+[Service]
+Type=oneshot
+User=helios
+Group=helios-runtime
+WorkingDirectory=/opt/helios/current
+EnvironmentFile=/etc/helios/helios.env
+StateDirectory=helios
+StateDirectoryMode=0750
+UMask=0027
+ExecStart=/usr/bin/python3 /opt/helios/current/scripts/backup-memory.py
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/helios
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=

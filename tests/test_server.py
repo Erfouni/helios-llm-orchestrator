@@ -1,6 +1,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -49,6 +50,42 @@ class HeliosServerTests(unittest.TestCase):
             server.run_model({"model": "provider/model", "prompt": "x", "temperature": 3})
         with self.assertRaises(server.GatewayError):
             server.run_model({"model": "provider/model", "prompt": "x", "top_p": -1})
+
+    def test_manus_key_can_use_systemd_credential_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as handle:
+            handle.write("temporary-test-key\n")
+            handle.flush()
+            with mock.patch.object(server, "MANUS_API_KEY_FILE", handle.name), mock.patch.dict(
+                os.environ, {"MANUS_API_KEY": ""}
+            ):
+                self.assertEqual(server.manus_api_key(), "temporary-test-key")
+
+    def test_manus_provider_creates_private_v2_task(self):
+        with mock.patch.object(
+            server, "manus_request", return_value={"ok": True, "task_id": "task-123"}
+        ) as request:
+            result = server.run_provider(
+                {
+                    "provider": "manus",
+                    "prompt": "research this",
+                    "agent_profile": "manus-1.6-max",
+                }
+            )
+        self.assertEqual(result["provider"], "manus")
+        self.assertEqual(result["task_id"], "task-123")
+        method, operation, payload = request.call_args.args[:3]
+        self.assertEqual((method, operation), ("POST", "task.create"))
+        self.assertEqual(payload["message"]["content"], "research this")
+        self.assertEqual(payload["share_visibility"], "private")
+        self.assertEqual(payload["agent_profile"], "manus-1.6-max")
+
+    def test_manus_provider_validates_before_network(self):
+        with self.assertRaises(server.GatewayError):
+            server.create_manus_task({"prompt": "x", "share_visibility": "internet"})
+        with self.assertRaises(server.GatewayError):
+            server.create_manus_task({"prompt": "x", "agent_profile": "unknown"})
+        with self.assertRaises(server.GatewayError):
+            server.manus_task_messages("task", {"verbose": ["maybe"]})
 
     def test_compare_rejects_duplicate_or_invalid_models(self):
         with self.assertRaises(server.GatewayError):

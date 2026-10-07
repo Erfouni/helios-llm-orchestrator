@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+AWS_TOKEN="$(/usr/bin/cat /var/run/awssmatoken)"
+export AWS_TOKEN
+
+MANUS_API_KEY_FILE="${CREDENTIALS_DIRECTORY:?systemd credential directory is missing}/manus_api_key"
+export MANUS_API_KEY_FILE
+
+exec /usr/local/bin/asm-exec -- \
+  /usr/bin/env -u AWS_TOKEN \
+  OPENROUTER_API_KEY={{resolve:secretsmanager:erfan-vps/helios/openrouter}} \
+  /usr/bin/python3 /opt/helios/current/agent/server.py

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from agent import benchmark_registry
 
@@ -265,6 +266,121 @@ class BenchmarkRegistryTests(unittest.TestCase):
                 "2020-01-09T00:00:00Z",
             )
             self.assertEqual(published["valid_until"], "2020-01-09T00:00:00Z")
+
+    def test_citation_matching_ignores_query_and_www_only(self):
+        citations = {"https://www.swebench.com/?utm_source=test"}
+        accepted = benchmark_registry._safe_source_url(
+            "https://swebench.com/", citations, set(), {"swebench.com"}
+        )
+        self.assertEqual(accepted, "https://swebench.com")
+        rejected = benchmark_registry._safe_source_url(
+            "https://swebench.com/verified", citations, set(), {"swebench.com"}
+        )
+        self.assertIsNone(rejected)
+
+    def test_resolves_reasoning_variant_and_dated_slug_to_base_model(self):
+        models = [
+            {
+                "id": "deepseek/deepseek-v4-pro-0813",
+                "name": "DeepSeek: DeepSeek V4 Pro 0813",
+                "created": 2,
+            },
+            {
+                "id": "openai/gpt-5.6-sol-pro",
+                "name": "OpenAI: GPT-5.6 Sol Pro",
+                "created": 1,
+            },
+        ]
+        deepseek = benchmark_registry.resolve_available_model(
+            "deepseek-v4-pro-high-20260813", models
+        )
+        self.assertEqual(deepseek["id"], "deepseek/deepseek-v4-pro-0813")
+        gpt = benchmark_registry.resolve_available_model(
+            "gpt-5.6-sol-xhigh (codex-harness)", models
+        )
+        self.assertEqual(gpt["id"], "openai/gpt-5.6-sol-pro")
+
+    def test_fresh_evidence_is_kept_when_no_openrouter_model_matches(self):
+        source = "https://official.example/leaderboard"
+        extracted = {
+            "benchmark_name": "Generation Benchmark",
+            "benchmark_date": "2026-08-23",
+            "ranking": [
+                {"rank": rank, "model_name": f"Unavailable {rank}", "score": 100-rank, "score_text": str(100-rank), "source_url": source}
+                for rank in range(1, 4)
+            ],
+        }
+        def request(*_args, **_kwargs):
+            return {
+                "model": "search/model",
+                "choices": [{"message": {
+                    "content": json.dumps(extracted),
+                    "annotations": [{"url_citation": {"url": source}}],
+                }}],
+            }
+        result = benchmark_registry._refresh_category(
+            "video_generation",
+            {"query": "video", "benchmark_hints": [], "allowed_domains": ["official.example"]},
+            {"min_ranked_models": 3, "valid_days": 8},
+            request, [], "2026-08-23",
+        )
+        self.assertFalse(result["openrouter_match_available"])
+        self.assertIsNone(result["selected_model"])
+        self.assertEqual(result["top_public_model"], "Unavailable 1")
+        self.assertEqual(result["evidence_model_count"], 3)
+
+
+    def test_official_csv_adapter_uses_approved_source_and_maps_models(self):
+        csv_text = "Rank,Overall Acc,Model\n1,88.0%,Model One\n2,80.0%,Model Two\n3,75.0%,Model Three\n"
+        page_text = "<p>Last Updated: 2026-08-23</p>"
+        class Response:
+            def __init__(self, text): self.text = text
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self): return self.text.encode()
+        def fake_urlopen(request, timeout=45):
+            url = request.full_url
+            return Response(csv_text if url.endswith('.csv') else page_text)
+        models = [{"id":"p/model-one","name":"Model One","created":1}]
+        spec = {
+            "source_adapter":"official_csv",
+            "benchmark_name":"BFCL V4",
+            "data_url":"https://official.example/data.csv",
+            "source_url":"https://official.example/leaderboard.html",
+            "rank_column":"Rank",
+            "model_column":"Model",
+            "score_column":"Overall Acc",
+            "date_regex":r"Last Updated:\s*(\d{4}-\d{2}-\d{2})",
+            "allowed_domains":["official.example"],
+        }
+        with mock.patch.object(benchmark_registry.urllib.request, "urlopen", fake_urlopen):
+            result = benchmark_registry._refresh_official_csv_category(
+                "agentic_tool_use", spec, {"min_ranked_models":3,"valid_days":8}, models
+            )
+        self.assertEqual(result["benchmark_date"], "2026-08-23")
+        self.assertEqual(result["selected_model"]["id"], "p/model-one")
+        self.assertEqual(result["selected_score"], 88.0)
+        self.assertEqual(result["evidence_method"], "approved_official_csv")
+
+    def test_resolver_prefers_base_text_model_over_image_or_customtools_variant(self):
+        models = [
+            {"id":"google/gemini-3-pro-preview","name":"Google: Gemini 3 Pro Preview","created":10},
+            {"id":"google/gemini-3-pro-image","name":"Google: Gemini 3 Pro Image","created":30},
+            {"id":"google/gemini-3-pro-preview-customtools","name":"Google: Gemini 3 Pro Preview Custom Tools","created":40},
+        ]
+        selected = benchmark_registry.resolve_available_model(
+            "Gemini-3-Pro-Preview (Prompt)", models
+        )
+        self.assertEqual(selected["id"], "google/gemini-3-pro-preview")
+
+    def test_resolver_ignores_full_date_suffix_when_base_slug_has_no_date(self):
+        models = [
+            {"id":"anthropic/claude-opus-4.5","name":"Anthropic: Claude Opus 4.5","created":10},
+        ]
+        selected = benchmark_registry.resolve_available_model(
+            "Claude-Opus-4-5-20251101 (FC)", models
+        )
+        self.assertEqual(selected["id"], "anthropic/claude-opus-4.5")
 
 
 if __name__ == "__main__":
