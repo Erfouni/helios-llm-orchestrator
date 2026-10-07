@@ -103,7 +103,25 @@ curl -X POST http://127.0.0.1:3188/benchmarks/refresh \
   -d '{"only_if_stale":true}'
 ```
 
-The installer schedules the same operation for Monday at 03:00 local time. A stale-only refresh searches only the categories that are missing, expired, or below the quality gates; categories no longer enabled in the config are dropped. Evidence dated more than `max_evidence_age_days` (180) before the refresh is rejected. Each category has its own `valid_until`; a partial refresh cannot make preserved old evidence appear fresh. If every category fails validation, the published registry remains untouched. Only one refresh runs at a time, including the scheduled one.
+The installer schedules the same operation for Monday at 03:00 local time. A stale-only refresh searches only the categories that are missing, expired, or below the quality gates; categories no longer enabled in the config are dropped. Evidence dated more than `max_evidence_age_days` (180) before the refresh is rejected. Each category has its own `valid_until`; a partial refresh cannot make preserved old evidence appear fresh. If every category fails validation, the published registry remains untouched. Only one refresh runs at a time, including the scheduled one. Categories that expire within `refresh_ahead_days` (2) are renewed early, so the weekly run never leaves one stale until the next.
+
+A ranked name maps only to the same OpenRouter model or a dated snapshot of it: every word and version number of the name must match, so a leaderboard's "GPT-5" never stands for `gpt-5-mini`, `gpt-5.1`, or an image variant. When no ranked model is on OpenRouter, the category reports that instead of selecting another model.
+
+The registry is stored in `HELIOS_STATE_DIR` (default `data/runtime/` in the clone, or `~/Library/Application Support/Helios` on macOS).
+
+## Manus tasks
+
+Helios can hand long agent jobs to Manus when `MANUS_API_KEY` or `MANUS_API_KEY_FILE` is set. Tasks run asynchronously: start one, then poll it.
+
+- `POST /manus/tasks`: start a task (`prompt`, optional `agent_profile`, `title`, `project_id`, `share_visibility`); `POST /run` with `"provider": "manus"` does the same
+- `GET /manus/tasks/{task_id}`: status
+- `GET /manus/tasks/{task_id}/messages?limit=<1-200>&order=<asc|desc>&cursor=<cursor>`: progress, results, and files
+- `POST /manus/tasks/{task_id}/stop`
+- `GET /providers`: which providers are configured
+
+## Shared context
+
+`GET /v2/global-context` returns a versioned, non-secret summary that applies across chats and projects. `POST /v2/global-context` replaces it; send the current `version` and an `idempotency_key`. Credential-like values are redacted before storage.
 
 ## Friendly aliases
 
