@@ -68,6 +68,12 @@ class HeliosServerTests(unittest.TestCase):
         with self.assertRaises(server.GatewayError):
             server.strict_bool("false", "only_if_stale")
 
+    def test_non_ascii_authorization_is_refused_not_a_crash(self):
+        with mock.patch.object(server, "LOCAL_API_KEY", "secret"):
+            self.assertTrue(server.local_request_authorized({"Authorization": "Bearer secret"}))
+            self.assertFalse(server.local_request_authorized({"Authorization": "Bearer sécret"}))
+            self.assertFalse(server.local_request_authorized({}))
+
     def test_non_loopback_host_is_not_the_default(self):
         self.assertIn(server.HOST, {"127.0.0.1", "::1", "localhost"})
 

@@ -35,8 +35,10 @@ The installer:
 4. prompts for the OpenRouter key with hidden input;
 5. encrypts the key with Windows DPAPI under `%APPDATA%\Helios`;
 6. registers `Helios LLM Orchestrator` to run at user logon;
-7. registers `Helios Weekly Benchmark Refresh` for Monday at 03:00;
+7. registers `Helios Weekly Benchmark Refresh` for Monday at 03:00, run as soon as possible afterwards if the computer was asleep or off;
 8. starts the agent and attempts an initial stale-only refresh.
+
+If you installed Helios before the missed-run catch-up was added, run the installer again to update both tasks.
 
 The DPAPI credential can be decrypted only in the same Windows user context. Plaintext is provided only to the child Python process in memory and is not written to the repository.
 

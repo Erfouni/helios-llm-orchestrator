@@ -54,6 +54,13 @@ The local registry is refreshed weekly from cited public web evidence only. Heli
 - Select the highest-ranked cited model that passes registry quality gates and is available on OpenRouter: `GET http://127.0.0.1:3188/benchmarks/select?category=<category>`
 - Explicit stale-only refresh: `POST http://127.0.0.1:3188/benchmarks/refresh` with `{"only_if_stale":true}`
 
+## Route and check with Jev
+
+Jev is a decision model reached through the same OpenRouter key. It returns typed answers with probabilities, not prose, and costs a fraction of a cent per call.
+
+- Route one task: `POST http://127.0.0.1:3188/route` with `{"task":"<task description>"}`. Jev picks the benchmark category and the response's `selection` is the specialist for it. If `needs_confirmation` is `true`, ask the user which category fits; do not pick one yourself.
+- Ask typed questions: `POST http://127.0.0.1:3188/decide` with `{"state":"<text>","questions":{"<name>":{"type":"noul","instructions":"<condition>"}}}`. Types are `noul` (probability a condition holds), `score` (`criteria`: 2-10 levels, lowest first), and `choice` (`criteria`: option -> description).
+
 Preserve `benchmark_name`, score, source URL, registry hash, and category freshness in project provenance. If evidence is missing, stale, low-quality, or unavailable on OpenRouter, report the limitation instead of fabricating a ranking.
 
 ## PROJECT
@@ -68,7 +75,7 @@ Before calling paid workers:
 2. Decompose the work into at most 12 atomic tasks.
 3. Give every task an ID, purpose, inputs, expected output, dependencies, acceptance check, risk, and model category.
 4. Keep the dependency graph acyclic. Mark browsing, files, terminal, GitHub, image generation, and other real-tool work as host-tool tasks.
-5. For every model task, query `/benchmarks/select` for its category and record the returned exact model and evidence.
+5. For every model task, call `/route` with its description and record the returned exact model and evidence. Confirm the category with the user when `needs_confirmation` is `true`. Use `/benchmarks/select` directly when the category is already known.
 
 ### 2. Review the plan and obtain approval
 
@@ -85,7 +92,7 @@ Show the user the task graph, dependencies, assigned specialists, independent re
 
 ### 4. Review and revise
 
-Review each material model output against its acceptance criteria using a different model family where practical. A reviewer call is another explicit `/run` request. Allow one revision pass by default; ask before additional paid retries.
+Review each material model output against its acceptance criteria using a different model family where practical. A reviewer call is another explicit `/run` request. Before paying for it, you may ask `/decide` one `noul` question per acceptance criterion and send an output whose answers are clearly below 0.5 back for revision; a passing Jev check does not replace the independent review. Allow one revision pass by default; ask before additional paid retries.
 
 Do not accept an output merely because the worker returned successfully. Block dependents when evidence, required artifacts, or acceptance criteria are missing.
 
