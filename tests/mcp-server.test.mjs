@@ -14,6 +14,8 @@ const PAYLOADS = {
   "/benchmarks": { version: 3, categories: { coding: { fresh: true } } },
   "/benchmarks/select": { category: "coding", model: "vendor/model", rank: 1 },
   "/benchmarks/refresh": { refreshed: false, reason: "registry is fresh" },
+  "/route": { category: "coding", confidence: 0.9, needs_confirmation: false, selection: null },
+  "/decide": { answers: { done: { type: "noul", noul: 0.97 } }, usage: { cost: 0.00003 } },
 };
 
 const GATEWAY_MAX_OUTPUT_TOKENS = 16000;
@@ -27,6 +29,16 @@ before(async () => {
   gateway = http.createServer((req, res) => {
     const [path, query = ""] = req.url.split("?");
     requests.push({ method: req.method, path, query });
+    if (path === "/route" || path === "/decide") {
+      let raw = "";
+      req.on("data", (chunk) => (raw += chunk));
+      req.on("end", () => {
+        runBodies.push({ path, body: JSON.parse(raw) });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(PAYLOADS[path]));
+      });
+      return;
+    }
     if (path === "/run" || path === "/compare") {
       let raw = "";
       req.on("data", (chunk) => (raw += chunk));
@@ -99,7 +111,7 @@ after(async () => {
 
 test("every tool advertises an object output schema", async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 6);
+  assert.equal(tools.length, 8);
   for (const tool of tools) {
     assert.equal(tool.outputSchema?.type, "object", `${tool.name} has no output schema`);
   }
@@ -117,6 +129,37 @@ for (const [name, args, path] of [
     assert.deepEqual(JSON.parse(result.content[0].text), PAYLOADS[path]);
   });
 }
+
+const DECIDE_ARGS = {
+  state: "The login API now returns 401 for expired tokens.",
+  questions: {
+    done: { type: "noul", instructions: "Does it return 401 for expired tokens?" },
+    quality: { type: "score", instructions: "How complete is it?", criteria: ["poor", "fair", "good"] },
+  },
+};
+
+for (const [name, args, path] of [
+  ["helios_route_task", { task: "Fix the login API" }, "/route"],
+  ["helios_decide", DECIDE_ARGS, "/decide"],
+]) {
+  test(`${name} posts its arguments to ${path} and returns the payload`, async () => {
+    runBodies.length = 0;
+    const result = await client.callTool({ name, arguments: args });
+    assert.equal(result.isError, undefined, result.content?.[0]?.text);
+    assert.deepEqual(result.structuredContent, PAYLOADS[path]);
+    assert.deepEqual(runBodies, [{ path, body: args }]);
+  });
+}
+
+test("helios_decide rejects an unknown question type before the gateway", async () => {
+  runBodies.length = 0;
+  const result = await client.callTool({
+    name: "helios_decide",
+    arguments: { state: "x", questions: { q: { type: "essay", instructions: "?" } } },
+  });
+  assert.equal(result.isError, true);
+  assert.deepEqual(runBodies, []);
+});
 
 test("helios_refresh_benchmarks is a POST to the refresh endpoint", async () => {
   requests.length = 0;

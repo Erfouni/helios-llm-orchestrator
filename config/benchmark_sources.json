@@ -35,61 +35,73 @@
   },
   "categories": {
     "reasoning": {
+      "description": "General analysis, planning, product thinking, or multi-step reasoning in text",
       "query": "latest public frontier AI reasoning model benchmark leaderboard",
       "benchmark_hints": ["GPQA Diamond", "ARC-AGI-2", "Humanity's Last Exam"],
       "allowed_domains": ["arcprize.org", "openai.com", "arxiv.org", "kaggle.com"]
     },
     "coding": {
+      "description": "Writing, debugging, or reviewing backend code, scripts, or other software",
       "query": "latest public coding and software engineering AI model benchmark leaderboard",
       "benchmark_hints": ["SWE-bench Verified", "LiveCodeBench"],
       "allowed_domains": ["swebench.com", "livecodebench.github.io", "openai.com"]
     },
     "frontend": {
+      "description": "Building web or app user interfaces: HTML, CSS, React components, layout, UI behavior",
       "query": "latest public frontend and web development AI model benchmark leaderboard",
       "benchmark_hints": ["WebDev Arena", "Design2Code"],
       "allowed_domains": ["arena.ai"]
     },
     "agentic_tool_use": {
+      "description": "Calling tools or APIs over several steps as an autonomous agent",
       "query": "latest public AI agent tool-use benchmark leaderboard",
       "benchmark_hints": ["BFCL", "TAU-bench", "ToolBench"],
       "allowed_domains": ["gorilla.cs.berkeley.edu", "sky.cs.berkeley.edu", "proceedings.mlr.press"]
     },
     "web_research": {
+      "description": "Researching current information across many web sources and synthesizing the findings",
       "query": "latest public AI web research and deep research benchmark leaderboard",
       "benchmark_hints": ["BrowseComp", "DeepResearch Bench", "GAIA"],
       "allowed_domains": ["openai.com", "deepresearch-bench.github.io", "xbench.org"]
     },
     "long_context": {
+      "description": "Working over very long documents or large inputs that must be read as a whole",
       "query": "latest public long-context language model benchmark leaderboard",
       "benchmark_hints": ["LongBench v2", "RULER"],
       "allowed_domains": ["longbench2.github.io", "arxiv.org", "aclanthology.org"]
     },
     "mathematics": {
+      "description": "Solving math problems, proofs, or quantitative calculations",
       "query": "latest public mathematics reasoning AI model benchmark leaderboard",
       "benchmark_hints": ["AIME", "MATH-500"],
       "allowed_domains": ["matharena.ai", "artificialanalysis.ai"]
     },
     "vision": {
+      "description": "Understanding or analyzing images, screenshots, charts, or diagrams",
       "query": "latest public multimodal image understanding model benchmark leaderboard",
       "benchmark_hints": ["MMMU-Pro", "MMBench"],
       "allowed_domains": ["mmmu-benchmark.github.io", "artificialanalysis.ai"]
     },
     "ocr": {
+      "description": "Extracting text from scanned documents, photos of text, or image-only PDFs",
       "query": "latest public OCR vision-language model benchmark leaderboard",
       "benchmark_hints": ["OCRBench v2", "OCRBench"],
       "allowed_domains": ["99franklin.github.io", "huggingface.co"]
     },
     "image_generation": {
+      "description": "Creating new images, illustrations, or diagrams from a description",
       "query": "latest public text-to-image generation model leaderboard",
       "benchmark_hints": ["Artificial Analysis Image Arena", "GenAI-Bench"],
       "allowed_domains": ["arena.ai", "artificialanalysis.ai"]
     },
     "video_generation": {
+      "description": "Creating video clips from a description",
       "query": "latest public AI text-to-video generation model leaderboard",
       "benchmark_hints": ["Artificial Analysis Video Arena", "VBench"],
       "allowed_domains": ["arena.ai", "artificialanalysis.ai"]
     },
     "multilingual": {
+      "description": "Writing or translating text in languages other than English, including Persian",
       "query": "latest public multilingual language model benchmark leaderboard including Persian",
       "benchmark_hints": ["Global-MMLU", "MMLU-ProX", "Persian language benchmark"],
       "allowed_domains": ["mmluprox.github.io", "cohere.com", "artificialanalysis.ai", "kaggle.com"]

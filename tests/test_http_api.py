@@ -72,6 +72,14 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body["error"], "only_if_stale must be a boolean")
 
+    def test_jev_routes_validate_before_any_provider_call(self):
+        status, body, _headers = self.call("/decide", {"state": "x", "questions": {}})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "questions must be an object with 1 to 16 entries")
+        status, body, _headers = self.call("/route", {"task": ""})
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "task is required")
+
     def test_non_json_post_is_refused_before_validation(self):
         # A cross-site <form enctype="text/plain"> can send this without a
         # CORS preflight, so it must not reach the paid endpoints.

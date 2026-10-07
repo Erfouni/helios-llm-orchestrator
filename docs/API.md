@@ -40,7 +40,40 @@ curl -X POST http://127.0.0.1:3188/compare \
   }'
 ```
 
-Two to four distinct non-empty models are supported. Run, compare, and benchmark-refresh requests share a bounded paid-request concurrency limit.
+Two to four distinct non-empty models are supported. Run, compare, route, decide, and benchmark-refresh requests share a bounded paid-request concurrency limit.
+
+## Route a task with Jev
+
+```bash
+curl -X POST http://127.0.0.1:3188/route \
+  -H 'Content-Type: application/json' \
+  -d '{"task": "Add rate limiting to the login API and write its tests."}'
+```
+
+Jev (`HELIOS_JEV_MODEL`, default `typesafe/jev-1.13`) chooses one enabled category from `config/benchmark_sources.json`, using each category's `description`. The response carries `category`, `confidence`, `probabilities`, `needs_confirmation`, the Jev `router` usage, and `selection`: the same object as `/benchmarks/select` for that category.
+
+When confidence is below `min_confidence` (default `0.6`, any value from 0 to 1 may be sent), `needs_confirmation` is `true` and `selection` is `null`: ask the user instead of guessing. If the category's evidence is stale or fails its quality gates, `selection` is `null` and `selection_error` explains why.
+
+## Ask Jev typed questions
+
+```bash
+curl -X POST http://127.0.0.1:3188/decide \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "state": "<the output to check>",
+    "questions": {
+      "has_tests": {"type": "noul", "instructions": "Does it include automated tests?"},
+      "risk": {"type": "score", "instructions": "How risky is this change?", "criteria": ["low", "medium", "high"]},
+      "owner": {"type": "choice", "instructions": "Which team owns it?", "criteria": {"backend": "APIs and data", "frontend": "User interface"}}
+    }
+  }'
+```
+
+- `noul`: the probability that a condition holds; no `criteria`.
+- `score`: `criteria` is an array of 2 to 10 levels, lowest first.
+- `choice`: `criteria` maps 2 to 255 option keys to descriptions.
+
+Up to 16 questions per call; names use letters, digits, and underscores. The text plus questions are limited to `HELIOS_MAX_DECISION_CHARS` (40000) characters. The response returns Jev's `answers` keyed by question name, with `model_used` and `usage`.
 
 ## Refresh the model catalog
 

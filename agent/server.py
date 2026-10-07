@@ -6,6 +6,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from typing import Any
 try:
     from agent.benchmark_registry import (
         BenchmarkRegistryError,
+        load_config,
         refresh_registry,
         registry_status,
         registry_view,
@@ -30,6 +32,7 @@ try:
 except ModuleNotFoundError:
     from benchmark_registry import (  # type: ignore
         BenchmarkRegistryError,
+        load_config,
         refresh_registry,
         registry_status,
         registry_view,
@@ -89,6 +92,10 @@ MAX_OUTPUT_TOKENS = _env_int("MAX_OUTPUT_TOKENS", 8192, 1, 200000)
 MAX_PROMPT_CHARS = _env_int("MAX_PROMPT_CHARS", 400000, 1000, 2_000_000)
 MAX_COMPARE_MODELS = _env_int("MAX_COMPARE_MODELS", 4, 2, 8)
 MAX_CONCURRENT_REQUESTS = _env_int("HELIOS_MAX_CONCURRENT_REQUESTS", 4, 1, 32)
+# Jev answers typed questions within a 32K-token context, shared by the text
+# and the questions; the character cap leaves room for non-English text.
+JEV_MODEL = os.environ.get("HELIOS_JEV_MODEL", "").strip() or "typesafe/jev-1.13"
+MAX_DECISION_CHARS = _env_int("HELIOS_MAX_DECISION_CHARS", 40000, 1000, 120000)
 LOCAL_API_KEY = os.environ.get("HELIOS_LOCAL_API_KEY", "").strip()
 KEYCHAIN_SERVICE = os.environ.get("OPENROUTER_KEYCHAIN_SERVICE", "helios-multimodel-router")
 KEYCHAIN_ACCOUNT = os.environ.get("OPENROUTER_KEYCHAIN_ACCOUNT", "openrouter-api-key")
@@ -456,6 +463,149 @@ def compare_models(data: dict[str, Any]) -> dict[str, Any]:
     return {"results": results}
 
 
+DECISION_QUESTION_TYPES = {"choice", "score", "noul"}
+ROUTE_MIN_CONFIDENCE = 0.6
+ROUTE_INSTRUCTIONS = "Which specialist category best fits the main work this task asks for?"
+
+
+def decision_question(key: Any, question: Any) -> dict[str, Any]:
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", key):
+        raise GatewayError("question names must be 1 to 64 letters, digits, or underscores")
+    if not isinstance(question, dict) or question.get("type") not in DECISION_QUESTION_TYPES:
+        raise GatewayError(f"questions.{key}.type must be choice, score, or noul")
+    instructions = question.get("instructions")
+    if not isinstance(instructions, str) or not instructions.strip():
+        raise GatewayError(f"questions.{key}.instructions is required")
+    criteria = question.get("criteria")
+    if question["type"] == "choice":
+        if (
+            not isinstance(criteria, dict)
+            or not 2 <= len(criteria) <= 255
+            or not all(isinstance(text, str) and text.strip() for text in criteria.values())
+        ):
+            raise GatewayError(
+                f"questions.{key}.criteria must map 2 to 255 options to descriptions"
+            )
+    elif question["type"] == "score":
+        if (
+            not isinstance(criteria, list)
+            or not 2 <= len(criteria) <= 10
+            or not all(isinstance(text, str) and text.strip() for text in criteria)
+        ):
+            raise GatewayError(f"questions.{key}.criteria must list 2 to 10 ordered levels")
+    elif criteria is not None:
+        raise GatewayError(f"questions.{key}.criteria is not used by noul questions")
+    cleaned = {"type": question["type"], "instructions": instructions}
+    if criteria is not None:
+        cleaned["criteria"] = criteria
+    return cleaned
+
+
+def run_decision(data: dict[str, Any]) -> dict[str, Any]:
+    """Ask Jev typed questions about one piece of text."""
+    state = data.get("state")
+    if not isinstance(state, str) or not state.strip():
+        raise GatewayError("state is required")
+    provided = data.get("questions")
+    if not isinstance(provided, dict) or not 1 <= len(provided) <= 16:
+        raise GatewayError("questions must be an object with 1 to 16 entries")
+    questions = {key: decision_question(key, value) for key, value in provided.items()}
+    if len(state) + len(json.dumps(questions, ensure_ascii=False)) > MAX_DECISION_CHARS:
+        raise GatewayError(
+            "Decision input is too large", 413, {"max_decision_chars": MAX_DECISION_CHARS}
+        )
+    # Jev is not a chat model: it has its own endpoint and returns typed answers.
+    response = openrouter_request(
+        "POST",
+        "/systemone",
+        {"model": JEV_MODEL, "state": state, "questions": questions},
+        timeout=60,
+    )
+    answers = response.get("answers")
+    if not isinstance(answers, dict):
+        raise GatewayError("Jev returned no answers", 502)
+    return {
+        "model_requested": JEV_MODEL,
+        "model_used": response.get("model", JEV_MODEL),
+        "answers": answers,
+        "usage": response.get("usage", {}),
+        "generation_id": response.get("id"),
+    }
+
+
+def answer_confidence(answer: dict[str, Any]) -> float | None:
+    confidence = answer.get("confidence")
+    if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+        return float(confidence)
+    probabilities = answer.get("probabilities")
+    if isinstance(probabilities, dict):
+        values = [
+            value
+            for value in probabilities.values()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        if values:
+            return float(max(values))
+    return None
+
+
+def route_task(data: dict[str, Any]) -> dict[str, Any]:
+    """Pick one task's benchmark category with Jev, then that category's specialist."""
+    task = data.get("task")
+    if not isinstance(task, str) or not task.strip():
+        raise GatewayError("task is required")
+    min_confidence = bounded_float(
+        data.get("min_confidence", ROUTE_MIN_CONFIDENCE), "min_confidence", 0, 1
+    )
+    categories = {
+        name: str(spec.get("description") or spec.get("query") or name)
+        for name, spec in load_config().get("categories", {}).items()
+        if isinstance(spec, dict) and spec.get("enabled", True)
+    }
+    if len(categories) < 2:
+        raise GatewayError("Routing needs at least two enabled benchmark categories", 503)
+    decision = run_decision(
+        {
+            "state": task,
+            "questions": {
+                "category": {
+                    "type": "choice",
+                    "instructions": ROUTE_INSTRUCTIONS,
+                    "criteria": categories,
+                }
+            },
+        }
+    )
+    answer = decision["answers"].get("category")
+    category = answer.get("choice") if isinstance(answer, dict) else None
+    if category not in categories:
+        raise GatewayError("Jev returned no known category", 502, {"answer": answer})
+    confidence = answer_confidence(answer)
+    probabilities = answer.get("probabilities")
+    result: dict[str, Any] = {
+        "category": category,
+        "confidence": confidence,
+        "probabilities": probabilities if isinstance(probabilities, dict) else None,
+        "needs_confirmation": confidence is None or confidence < min_confidence,
+        "selection": None,
+        "router": {
+            key: decision[key] for key in ("model_used", "usage", "generation_id")
+        },
+    }
+    if result["needs_confirmation"]:
+        # A low-confidence guess is a question for the user, not a route.
+        return result
+    try:
+        result["selection"] = select_benchmark_model(category)
+    except BenchmarkRegistryError as exc:
+        result["selection_error"] = {
+            "error": str(exc),
+            "status": exc.status,
+            "details": exc.details,
+        }
+    return result
+
+
 def public_model(item: dict[str, Any]) -> dict[str, Any]:
     return {
         key: item.get(key)
@@ -591,7 +741,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "Unauthorized"})
                 return
             data = self.read_json()
-            if parsed.path in {"/run", "/compare", "/benchmarks/refresh"}:
+            if parsed.path in {"/run", "/compare", "/decide", "/route", "/benchmarks/refresh"}:
                 acquired = _paid_slots.acquire(blocking=False)
                 if not acquired:
                     raise GatewayError("Helios is busy; retry later", 429)
@@ -599,6 +749,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, run_model(data))
             elif parsed.path == "/compare":
                 self.send_json(200, compare_models(data))
+            elif parsed.path == "/decide":
+                self.send_json(200, run_decision(data))
+            elif parsed.path == "/route":
+                self.send_json(200, route_task(data))
             elif parsed.path == "/refresh-models":
                 self.send_json(200, {"ok": True, "model_count": len(get_models(force=True))})
             elif parsed.path == "/benchmarks/refresh":
