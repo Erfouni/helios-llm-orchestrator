@@ -53,6 +53,8 @@ except ModuleNotFoundError:
 MODULE_DIR = Path(__file__).resolve().parent
 BASE_DIR = MODULE_DIR.parent if (MODULE_DIR.parent / "config").exists() else MODULE_DIR
 ENV_FILE = BASE_DIR / ".env"
+# Keep in step with package.json; tests/test_version.py checks the two match.
+VERSION = "2.1.0"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MANUS_BASE_URL = "https://api.manus.ai/v2"
 MODEL_CACHE_TTL_SECONDS = 600
@@ -176,7 +178,8 @@ def api_key() -> str:
     key = os.environ.get("OPENROUTER_API_KEY", "").strip() or keychain_api_key()
     if not key:
         raise GatewayError(
-            "OpenRouter credential is not configured in the environment or macOS Keychain",
+            "OpenRouter credential is not configured: set OPENROUTER_API_KEY "
+            "(the service runner does) or store it in the macOS Keychain",
             503,
         )
     return key
@@ -224,7 +227,7 @@ def manus_request(
         headers={
             "x-manus-api-key": manus_api_key(),
             "Content-Type": "application/json",
-            "User-Agent": "Helios/2.0 ManusProvider",
+            "User-Agent": f"Helios/{VERSION} ManusProvider",
         },
         method=method,
     )
@@ -842,7 +845,7 @@ def safe_benchmark_status() -> dict[str, Any]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "HeliosOrchestrator/2.1"
+    server_version = f"HeliosOrchestrator/{VERSION}"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write(
@@ -1129,7 +1132,7 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "ok": True,
                         "service": "helios-llm-orchestrator",
-                        "version": "2.1.0",
+                        "version": VERSION,
                         "configured": api_key_configured(),
                         "loopback_only": True,
                         "durable_project_memory": True,
@@ -1278,7 +1281,7 @@ def main() -> None:
         json.dumps(
             {
                 "service": "helios-llm-orchestrator",
-                "version": "2.1.0",
+                "version": VERSION,
                 "url": display_url(HOST, PORT),
                 "env_file": str(ENV_FILE),
                 "durable_project_memory": True,
