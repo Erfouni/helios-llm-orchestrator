@@ -171,8 +171,11 @@ def loopback_host_header(value: Any) -> bool:
 def local_request_authorized(headers: Any) -> bool:
     if not LOCAL_API_KEY:
         return True
+    # Bytes, not str: compare_digest raises TypeError on non-ASCII text, which
+    # would turn a wrong header into a 500 instead of a 401.
     return hmac.compare_digest(
-        str(headers.get("Authorization", "")), "Bearer " + LOCAL_API_KEY
+        str(headers.get("Authorization", "")).encode("utf-8"),
+        ("Bearer " + LOCAL_API_KEY).encode("utf-8"),
     )
 
 
