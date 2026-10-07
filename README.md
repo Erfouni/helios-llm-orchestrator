@@ -2,7 +2,7 @@
 
 > Turn ChatGPT or Codex into the lead orchestrator of a specialist AI team.
 
-Helios is a local-first **multi-LLM orchestrator, MCP server, and OpenRouter gateway**. It lets ChatGPT, Codex, or another MCP client break a complex project into focused tasks, select an evidence-backed specialist for each task, review the results, and integrate the accepted work.
+Helios is a **multi-LLM orchestrator, MCP server, OpenRouter gateway, and durable project-memory service**. It lets ChatGPT, Codex, or another MCP client break a complex project into focused tasks, select an evidence-backed specialist for each task, review the results, and integrate the accepted work.
 
 **Try it first:** the [five-minute quickstart](#quickstart-five-minutes-no-installer) runs Helios from a clone with no installer and no background services.
 
@@ -20,7 +20,7 @@ The examples are intentionally not hardcoded. Helios refreshes a cited public be
 
 ## How a big project runs today
 
-The workflow below is current behavior when the Helios skill is used by ChatGPT or Codex. Project state lives in the active host conversation.
+The workflow below is current behavior when the Helios skill is used by ChatGPT or Codex. Project state is persisted in SQLite on the Helios host, survives service restarts, and can be resumed from another client conversation.
 
 ```mermaid
 flowchart TB
@@ -30,8 +30,8 @@ flowchart TB
     D --> Q["Ready-task queue<br/>up to 4 independent tasks"]
 
     Q --> C["Jev classifies each task<br/>research • coding • frontend<br/>reasoning • vision • generation"]
-    C --> M["Helios MCP server<br/>one selection + run per task"]
-    M <-->|"Loopback HTTP"| A["Local Helios agent<br/>127.0.0.1:3188"]
+    C --> M["Helios MCP server<br/>project memory + specialist execution"]
+    M <-->|"Authenticated remote MCP"| A["GPT Computer Helios service<br/>loopback-only 127.0.0.1:3188"]
 
     W["Official public benchmarks<br/>leaderboards • primary papers"] -->|"Weekly web refresh"| B["Versioned registry<br/>citations • per-category freshness"]
     B --> R["Highest-ranked eligible<br/>OpenRouter specialist"]
@@ -75,23 +75,21 @@ Host-tool tasks—such as browsing, files, terminal commands, GitHub, or media g
 
 Available now:
 
-- ChatGPT/Codex-led project decomposition and session-scoped task graphs;
+- ChatGPT/Codex-led project decomposition with durable task graphs;
 - per-task benchmark-guided specialist selection, with Jev choosing each task's category;
 - typed Jev checks (choice, score, yes/no probability) as a cheap first acceptance gate;
 - parallel model execution, independent review, and final integration;
 - Direct mode for one named model and Compare mode for two to four models;
 - live OpenRouter model discovery;
 - weekly, citation-backed public benchmark discovery with per-category freshness;
-- loopback-only HTTP and MCP-over-stdio access;
-- native startup automation and Monday 03:00 refresh on macOS and Windows.
+- restart-safe SQLite/WAL project memory and a persistent dependency scheduler;
+- start, pause, resume, cancel, verification, approval, and revision workflows;
+- enforced token, cost, concurrency, and retry controls;
+- append-only event, execution, usage, and artifact histories;
+- loopback-only HTTP with MCP-over-stdio or authenticated remote MCP access;
+- native startup automation, daily database backups, CloudWatch logging, and Monday 03:00 benchmark refresh.
 
-Not yet durable:
-
-- restart recovery and cross-conversation project state;
-- a persistent dependency scheduler;
-- pause/resume, enforced project budgets, durable artifact history, and event logs.
-
-Those durable features are the scope of [Helios V2](docs/HELIOS_V2_TECHNICAL_SPEC.md). V2 does not replace today’s decomposition workflow; it moves that working host-orchestrated flow into a persistent local engine.
+The implemented lifecycle follows [Helios V2](docs/HELIOS_V2_TECHNICAL_SPEC.md) while retaining the original Direct, Compare, and benchmark-routing APIs.
 
 ## Benchmark routing
 
@@ -165,7 +163,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:3188/benchmarks/refresh -Content
 
 The registry is written to `data/runtime/` in the clone (on macOS, `~/Library/Application Support/Helios`); set `HELIOS_STATE_DIR` to keep it elsewhere.
 
-Finally, add [mcp/client-config.example.json](mcp/client-config.example.json) to your MCP client with the absolute path of your clone. The client should list eight Helios tools. When you want Helios to start at login and refresh its benchmarks every Monday, run the installer below; it keeps the key in macOS Keychain or Windows DPAPI instead of the environment.
+Finally, add [mcp/client-config.example.json](mcp/client-config.example.json) to your MCP client with the absolute path of your clone. The client should list twenty Helios tools. When you want Helios to start at login and refresh its benchmarks every Monday, run the installer below; it keeps the key in macOS Keychain or Windows DPAPI instead of the environment.
 
 ## Installation
 
@@ -214,11 +212,23 @@ Copy [mcp/client-config.example.json](mcp/client-config.example.json), replace t
 | `openrouter_list_models` | Search the live OpenRouter catalog |
 | `openrouter_run_model` | Run one approved specialist task |
 | `openrouter_compare_models` | Compare two to four models |
+| `manus_create_task` | Start an approved asynchronous Manus agent task |
+| `manus_get_task` | Read a Manus task's status |
+| `manus_list_task_messages` | Poll a Manus task for progress, results, and files |
+| `manus_stop_task` | Stop a running Manus task |
+| `helios_get_global_context` | Read the durable cross-chat context |
+| `helios_update_global_context` | Update the durable cross-chat context |
 | `helios_get_benchmark_registry` | Inspect evidence and freshness |
 | `helios_select_benchmark_model` | Select an eligible specialist by category |
 | `helios_route_task` | Let Jev pick a task's category, then select its specialist |
 | `helios_decide` | Ask Jev typed choice, score, or yes/no questions about a text |
 | `helios_refresh_benchmarks` | Explicitly run a stale-only or full web refresh |
+| `helios_create_project` | Create a durable project with budgets and controls |
+| `helios_plan_project` | Persist and validate a dependency-safe task plan |
+| `helios_project_action` | Start, pause, resume, or cancel a project |
+| `helios_get_project_memory` | Retrieve project state, tasks, usage, artifacts, and events |
+| `helios_run_task` | Execute one ready task through OpenRouter |
+| `helios_review_task` | Verify, approve, or request revision of a task |
 
 ## HTTP API
 
@@ -228,23 +238,33 @@ Copy [mcp/client-config.example.json](mcp/client-config.example.json), replace t
 - `POST /compare`
 - `POST /route`
 - `POST /decide`
+- `GET /providers`
+- `POST /manus/tasks`, `GET /manus/tasks/{task_id}`, `GET /manus/tasks/{task_id}/messages`, `POST /manus/tasks/{task_id}/stop`
+- `GET|POST /v2/global-context`
 - `POST /refresh-models`
 - `GET /benchmarks/status`
 - `GET /benchmarks?category=<category>`
 - `GET /benchmarks/select?category=<category>`
 - `POST /benchmarks/refresh`
+- `GET|POST /v2/projects`
+- `GET /v2/projects/{project_id}`
+- `POST /v2/projects/{project_id}/{plan|start|pause|resume|cancel}`
+- `GET /v2/projects/{project_id}/{tasks|artifacts|events|usage}`
+- `GET /v2/tasks/{task_id}`
+- `POST /v2/tasks/{task_id}/{run|verify|approve|request-revision}`
 
-There are intentionally no `/v2/projects` endpoints in the current server. See [API documentation](docs/API.md) and the [راهنمای فارسی](docs/USAGE_FA.md).
+See [API documentation](docs/API.md), the [V2 technical specification](docs/HELIOS_V2_TECHNICAL_SPEC.md), and the [راهنمای فارسی](docs/USAGE_FA.md).
 
 ## Security
 
 - The listener rejects non-loopback hosts.
-- OpenRouter credentials come from macOS Keychain, a Windows DPAPI-encrypted user credential, or the process environment and are never returned.
+- OpenRouter credentials can come from AWS Secrets Manager, macOS Keychain, a Windows DPAPI-encrypted user credential, or the process environment and are never returned or persisted in project memory.
 - Optional `HELIOS_LOCAL_API_KEY` authentication can protect local HTTP calls when the MCP process is configured with the same value.
 - Request bodies, messages, numeric parameters, paid concurrency, and model counts are bounded.
 - HTTP errors do not expose unexpected internal exception details.
 - External model output is treated as untrusted data.
 - Routing never grants an external model authority to write files or publish content.
+- The existing cloud LinkedIn connector remains a separate host capability; LinkedIn cookies and credentials are not copied into Helios or exposed to external models.
 
 Run the complete verification suite:
 

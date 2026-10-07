@@ -6,13 +6,13 @@
 
 این قابلیت‌ها همین حالا کار می‌کنند:
 
-- خردکردن پروژه و ساخت task graph در همان گفت‌وگوی ChatGPT/Codex؛
+- خردکردن پروژه و ساخت task graph ماندگار؛
 - انتخاب مدل جداگانه برای تحقیق، کدنویسی، فرانت‌اند، استدلال، OCR، Vision و Generation؛
 - اجرای هم‌زمان حداکثر چهار تسک مستقل؛
 - بازبینی با یک خانواده مدل دیگر و یک نوبت اصلاح؛
 - ثبت نام واقعی مدل استفاده‌شده و منبع انتخاب.
 
-وضعیت پروژه فعلاً session-scoped است. بازیابی بعد از restart، pause/resume دائمی، بودجه اجباری و event log در برنامه V2 قرار دارند؛ endpointهای `/v2/projects` هنوز وجود ندارند.
+از نسخه‌ی 2، وضعیت پروژه‌ها در پایگاه داده‌ی SQLite روی خود سرور هلیوس ذخیره می‌شود: بعد از restart از بین نمی‌رود و از گفت‌وگوی دیگری هم قابل ادامه است. شروع، توقف موقت، ادامه و لغو پروژه، سقف توکن و هزینه، و تاریخچه‌ی رویدادها، اجراها و فایل‌ها همه ماندگارند و از طریق endpointهای `/v2/projects` و ابزارهای MCP پروژه در دسترس‌اند. هلیوس می‌تواند تسک‌های طولانی را هم به Manus بسپارد.
 
 ## رجیستری بنچمارک
 
@@ -65,6 +65,10 @@ curl http://127.0.0.1:3188/health
 - `helios_route_task`: انتخاب دسته‌ی تسک با Jev و برگرداندن متخصص آن
 - `helios_decide`: پرسیدن سؤال‌های ساختاریافته (choice، score، noul) از Jev
 - `helios_refresh_benchmarks`: refresh صریح رجیستری
+- `helios_create_project`، `helios_plan_project`، `helios_project_action`: ساختن پروژه‌ی ماندگار، ثبت برنامه و شروع/توقف/ادامه/لغو آن
+- `helios_get_project_memory`، `helios_run_task`، `helios_review_task`: خواندن حافظه‌ی پروژه، اجرای یک تسک و بازبینی/تأیید آن
+- `helios_get_global_context`، `helios_update_global_context`: زمینه‌ی مشترک بین همه‌ی گفت‌وگوها
+- `manus_create_task`، `manus_get_task`، `manus_list_task_messages`، `manus_stop_task`: کار با تسک‌های Manus
 
 برای تنظیم MCP، فایل `mcp/client-config.example.json` را کپی و مسیر مطلق پروژه را جایگزین کنید.
 

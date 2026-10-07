@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from agent import benchmark_registry
 
@@ -302,6 +303,128 @@ class BenchmarkRegistryTests(unittest.TestCase):
             )
             self.assertEqual(published["valid_until"], "2020-01-09T00:00:00Z")
 
+    def test_citation_matching_ignores_query_and_www_only(self):
+        citations = {"https://www.swebench.com/?utm_source=test"}
+        accepted = benchmark_registry._safe_source_url(
+            "https://swebench.com/", citations, set(), {"swebench.com"}
+        )
+        self.assertEqual(accepted, "https://swebench.com")
+        rejected = benchmark_registry._safe_source_url(
+            "https://swebench.com/verified", citations, set(), {"swebench.com"}
+        )
+        self.assertIsNone(rejected)
+
+    def test_resolves_reasoning_variant_and_dated_slug_to_base_model(self):
+        models = [
+            {
+                "id": "deepseek/deepseek-v4-pro-0813",
+                "name": "DeepSeek: DeepSeek V4 Pro 0813",
+                "created": 2,
+            },
+            {
+                "id": "openai/gpt-5.6-sol-pro",
+                "name": "OpenAI: GPT-5.6 Sol Pro",
+                "created": 1,
+            },
+        ]
+        deepseek = benchmark_registry.resolve_available_model(
+            "deepseek-v4-pro-high-20260813", models
+        )
+        self.assertEqual(deepseek["id"], "deepseek/deepseek-v4-pro-0813")
+        # Run descriptions do not make the ranked model a different one, but a
+        # Pro sibling is not the model the leaderboard ranked.
+        gpt = benchmark_registry.resolve_available_model(
+            "gpt-5.6-sol-xhigh (codex-harness)", models
+        )
+        self.assertIsNone(gpt)
+        models.append({"id": "openai/gpt-5.6-sol", "name": "OpenAI: GPT-5.6 Sol", "created": 0})
+        gpt = benchmark_registry.resolve_available_model(
+            "gpt-5.6-sol-xhigh (codex-harness)", models
+        )
+        self.assertEqual(gpt["id"], "openai/gpt-5.6-sol")
+
+    def test_fresh_evidence_is_kept_when_no_openrouter_model_matches(self):
+        source = "https://official.example/leaderboard"
+        extracted = {
+            "benchmark_name": "Generation Benchmark",
+            "benchmark_date": "2026-08-23",
+            "ranking": [
+                {"rank": rank, "model_name": f"Unavailable {rank}", "score": 100-rank, "score_text": str(100-rank), "source_url": source}
+                for rank in range(1, 4)
+            ],
+        }
+        def request(*_args, **_kwargs):
+            return {
+                "model": "search/model",
+                "choices": [{"message": {
+                    "content": json.dumps(extracted),
+                    "annotations": [{"url_citation": {"url": source}}],
+                }}],
+            }
+        result = benchmark_registry._refresh_category(
+            "video_generation",
+            {"query": "video", "benchmark_hints": [], "allowed_domains": ["official.example"]},
+            {"min_ranked_models": 3, "valid_days": 8},
+            request, [], "2026-08-23",
+        )
+        self.assertFalse(result["openrouter_match_available"])
+        self.assertIsNone(result["selected_model"])
+        self.assertEqual(result["top_public_model"], "Unavailable 1")
+        self.assertEqual(result["evidence_model_count"], 3)
+
+
+    def test_official_csv_adapter_uses_approved_source_and_maps_models(self):
+        csv_text = "Rank,Overall Acc,Model\n1,88.0%,Model One\n2,80.0%,Model Two\n3,75.0%,Model Three\n"
+        page_text = "<p>Last Updated: 2026-08-23</p>"
+        class Response:
+            def __init__(self, text): self.text = text
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self): return self.text.encode()
+        def fake_urlopen(request, timeout=45):
+            url = request.full_url
+            return Response(csv_text if url.endswith('.csv') else page_text)
+        models = [{"id":"p/model-one","name":"Model One","created":1}]
+        spec = {
+            "source_adapter":"official_csv",
+            "benchmark_name":"BFCL V4",
+            "data_url":"https://official.example/data.csv",
+            "source_url":"https://official.example/leaderboard.html",
+            "rank_column":"Rank",
+            "model_column":"Model",
+            "score_column":"Overall Acc",
+            "date_regex":r"Last Updated:\s*(\d{4}-\d{2}-\d{2})",
+            "allowed_domains":["official.example"],
+        }
+        with mock.patch.object(benchmark_registry.urllib.request, "urlopen", fake_urlopen):
+            result = benchmark_registry._refresh_official_csv_category(
+                "agentic_tool_use", spec, {"min_ranked_models":3,"valid_days":8}, models
+            )
+        self.assertEqual(result["benchmark_date"], "2026-08-23")
+        self.assertEqual(result["selected_model"]["id"], "p/model-one")
+        self.assertEqual(result["selected_score"], 88.0)
+        self.assertEqual(result["evidence_method"], "approved_official_csv")
+
+    def test_resolver_prefers_base_text_model_over_image_or_customtools_variant(self):
+        models = [
+            {"id":"google/gemini-3-pro-preview","name":"Google: Gemini 3 Pro Preview","created":10},
+            {"id":"google/gemini-3-pro-image","name":"Google: Gemini 3 Pro Image","created":30},
+            {"id":"google/gemini-3-pro-preview-customtools","name":"Google: Gemini 3 Pro Preview Custom Tools","created":40},
+        ]
+        selected = benchmark_registry.resolve_available_model(
+            "Gemini-3-Pro-Preview (Prompt)", models
+        )
+        self.assertEqual(selected["id"], "google/gemini-3-pro-preview")
+
+    def test_resolver_ignores_full_date_suffix_when_base_slug_has_no_date(self):
+        models = [
+            {"id":"anthropic/claude-opus-4.5","name":"Anthropic: Claude Opus 4.5","created":10},
+        ]
+        selected = benchmark_registry.resolve_available_model(
+            "Claude-Opus-4-5-20251101 (FC)", models
+        )
+        self.assertEqual(selected["id"], "anthropic/claude-opus-4.5")
+
     def test_ranked_name_does_not_resolve_to_a_sibling_model(self):
         models = [
             {"id": "openai/gpt-5", "name": "OpenAI: GPT-5", "created": 100},
@@ -314,6 +437,35 @@ class BenchmarkRegistryTests(unittest.TestCase):
         resolve = benchmark_registry.resolve_available_model
         self.assertEqual(resolve("GPT-5", models)["id"], "openai/gpt-5")
         self.assertEqual(resolve("Gemini 3 Pro", models)["id"], "google/gemini-3-pro")
+
+    def test_names_seen_in_production_resolve_to_the_ranked_model(self):
+        # Each of these mapped to a different model in the live registry.
+        models = [
+            {"id": "openai/gpt-5", "name": "OpenAI: GPT-5", "created": 1},
+            {"id": "openai/gpt-5.5", "name": "OpenAI: GPT-5.5", "created": 5},
+            {"id": "openai/gpt-5.6-luna-pro", "name": "OpenAI: GPT-5.6 Luna Pro", "created": 6},
+            {"id": "openai/o3", "name": "OpenAI: o3", "created": 1},
+            {"id": "openai/o3-pro", "name": "OpenAI: o3 Pro", "created": 2},
+            {"id": "anthropic/claude-opus-5.5", "name": "Anthropic: Claude Opus 5.5", "created": 1},
+            {"id": "perplexity/sonar", "name": "Perplexity: Sonar", "created": 3},
+            {"id": "perplexity/sonar-pro-search", "name": "Perplexity: Sonar Pro Search", "created": 4},
+            {"id": "perplexity/sonar-reasoning-pro", "name": "Perplexity: Sonar Reasoning Pro", "created": 1},
+            {"id": "nvidia/nemotron-3-nano-30b-a3b", "name": "NVIDIA: Nemotron 3 Nano 30B A3B", "created": 1},
+            {"id": "google/gemini-3.1-flash-lite", "name": "Google: Gemini 3.1 Flash Lite", "created": 1},
+        ]
+        resolve = benchmark_registry.resolve_available_model
+        expected = {
+            "GPT-5 (high)": "openai/gpt-5",
+            "o3": "openai/o3",
+            "Claude Opus 5.5 (Adaptive Reasoning, Max Effort, Default Fallback)": "anthropic/claude-opus-5.5",
+            "Perplexity-Sonar-Reasoning-Pro(high)": "perplexity/sonar-reasoning-pro",
+            "NVIDIA Nemotron 3 Nano Omni 30B A3B": None,
+            "gemini-omni-1.1-flash": None,
+        }
+        for name, model_id in expected.items():
+            with self.subTest(name=name):
+                result = resolve(name, models)
+                self.assertEqual(result and result["id"], model_id)
 
     def test_no_sibling_stands_in_for_a_missing_ranked_model(self):
         models = [
@@ -462,6 +614,22 @@ class RegistryRefreshTests(unittest.TestCase):
         published = benchmark_registry.load_registry(self.registry_path)
         self.assertEqual(published["categories"]["coding"], current_entry())
         self.assertEqual(published["status"], "current")
+
+    def test_stale_only_refresh_renews_evidence_about_to_expire(self):
+        # Evidence lasts 8 days and the refresh runs every 7: without looking
+        # ahead, each weekly run skipped categories valid for one more day, and
+        # they stayed stale for the next 6.
+        self.write(self.config_path, {"categories": {"coding": {"query": "coding"}, "frontend": {"query": "frontend"}}})
+        tomorrow = benchmark_registry.isoformat(benchmark_registry.utc_now() + benchmark_registry.timedelta(days=1))
+        self.write(
+            self.registry_path,
+            {
+                "valid_until": tomorrow,
+                "categories": {"coding": current_entry(), "frontend": dict(current_entry(), valid_until=tomorrow)},
+            },
+        )
+        refreshed = self.refresh(only_if_stale=True)
+        self.assertEqual(refreshed["refreshed_categories"], ["frontend"])
 
     def test_refresh_is_refused_while_another_process_holds_the_lock(self):
         self.write(self.config_path, {"categories": {"coding": {"query": "coding"}}})

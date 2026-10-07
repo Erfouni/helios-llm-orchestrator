@@ -6,6 +6,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "agent" / "server.py"
@@ -51,6 +52,25 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(body["service"], "helios-llm-orchestrator")
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(headers["Content-Security-Policy"], "default-src 'none'")
+
+    def test_providers_reports_manus_without_exposing_credentials(self):
+        with mock.patch.object(server, "manus_api_key_configured", return_value=True):
+            status, body, _headers = self.call("/providers")
+        self.assertEqual(status, 200)
+        self.assertTrue(body["manus"]["configured"])
+        self.assertEqual(body["manus"]["api_version"], "v2")
+        self.assertNotIn("key", body["manus"])
+
+    def test_run_can_dispatch_to_manus(self):
+        with mock.patch.object(
+            server, "manus_request", return_value={"ok": True, "task_id": "task-http"}
+        ):
+            status, body, _headers = self.call(
+                "/run", {"provider": "manus", "prompt": "hello"}
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["provider"], "manus")
+        self.assertEqual(body["task_id"], "task-http")
 
     def test_invalid_model_limit_is_400_without_catalog_call(self):
         status, body, _headers = self.call("/models?limit=abc")

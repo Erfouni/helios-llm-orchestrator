@@ -9,12 +9,16 @@ versioned local registry.
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import os
 import re
 import threading
+from collections import Counter
+import urllib.error
 import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -321,22 +325,66 @@ def _normalize(value: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", value))
 
 
-def _tokens(value: str) -> set[str]:
-    ignored = {
-        "ai",
-        "model",
-        "preview",
-        "latest",
-        "instruct",
-        "it",
-        "chat",
-        "anthropic",
-        "google",
-        "openai",
-        "moonshotai",
-        "z",
-    }
-    return {token for token in _normalize(value).split() if token not in ignored}
+_IGNORED_TOKENS = {
+    "ai",
+    "model",
+    "preview",
+    "latest",
+    "instruct",
+    "it",
+    "chat",
+    "anthropic",
+    "google",
+    "openai",
+    "moonshotai",
+    "z",
+}
+# Words leaderboards add to say how a model was run ("GPT-5 (high)", "(FC)").
+# They do not name the model, but in an OpenRouter slug some of them do name a
+# different one (qwen3-max, gpt-5-codex), so sibling checks keep them.
+_RUN_ANNOTATION_TOKENS = {
+    "max",
+    "high",
+    "xhigh",
+    "medium",
+    "low",
+    "reasoning",
+    "grounding",
+    "codex",
+    "harness",
+    "fc",
+    "prompt",
+}
+
+
+# A ranked name may also carry these without naming a different model: run
+# descriptions, "thinking", "Non-reasoning", and a vendor next to the model.
+_DROPPABLE_TOKENS = _IGNORED_TOKENS | _RUN_ANNOTATION_TOKENS | {
+    "thinking",
+    "non",
+    "alibaba",
+    "meta",
+    "xai",
+    "microsoft",
+    "amazon",
+}
+
+
+def _token_list(value: str) -> list[str]:
+    result: list[str] = []
+    for token in _normalize(value).split():
+        if token in _IGNORED_TOKENS:
+            continue
+        # Leaderboards often append evaluation/release dates that are absent from
+        # the canonical API model slug. Treat YYYYMMDD as metadata, not identity.
+        if re.fullmatch(r"20\d{6}", token):
+            continue
+        result.append(token)
+    return result
+
+
+def _is_number(token: str) -> bool:
+    return any(ch.isdigit() for ch in token)
 
 
 def _is_snapshot_token(token: str) -> bool:
@@ -347,17 +395,29 @@ def _is_snapshot_token(token: str) -> bool:
 def resolve_available_model(name: str, models: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Conservatively map a public leaderboard name to an OpenRouter model.
 
-    A sibling must not stand in for the ranked model: a leaderboard's "GPT-5"
-    is not gpt-5-nano, gpt-5.1 or gpt-5-image. Besides the words of the ranked
-    name, a candidate may only carry a dated snapshot suffix.
+    A sibling must never stand in for the ranked model. Every word and version
+    number of the ranked name, apart from parenthesized notes and run
+    descriptions, must be in the candidate, and the candidate may add nothing
+    but a dated snapshot suffix. So "GPT-5 (high)" is gpt-5, never gpt-5.5,
+    gpt-5-nano or gpt-5-image, and a name with no such model stays unmatched.
+    Version numbers are counted, not just looked up, because 5.5 is not 5.
     """
     requested = _normalize(name)
     if not requested:
         return None
+    every = Counter(_token_list(name))
+    core = [
+        token
+        for token in _token_list(re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", name))
+        if token not in _DROPPABLE_TOKENS
+    ]
+    if not core:
+        return None
+    core_words = {token for token in core if not _is_number(token)}
+    core_numbers = Counter(token for token in core if _is_number(token))
+    specialized_markers = {"image", "audio", "video", "embedding", "customtools", "batch"}
     exact: list[dict[str, Any]] = []
-    scored: list[tuple[float, int, int, dict[str, Any]]] = []
-    requested_tokens = _tokens(name)
-    requested_numbers = {token for token in requested_tokens if any(ch.isdigit() for ch in token)}
+    scored: list[tuple[int, int, int, dict[str, Any]]] = []
 
     for item in models:
         model_id = str(item.get("id", ""))
@@ -367,22 +427,33 @@ def resolve_available_model(name: str, models: list[dict[str, Any]]) -> dict[str
         slug = model_id.split("/", 1)[-1]
         short_name = model_name.split(": ", 1)[-1]
         haystack = _normalize(model_id + " " + model_name)
+        candidate_all_tokens = set(haystack.split())
+        requested_all_tokens = set(requested.split())
+        if any(
+            marker in candidate_all_tokens and marker not in requested_all_tokens
+            for marker in specialized_markers
+        ):
+            continue
         if requested in {_normalize(value) for value in (model_id, model_name, slug, short_name)}:
             exact.append(item)
             continue
-        candidate_tokens = _tokens(model_id + " " + model_name)
-        if not requested_tokens or not candidate_tokens:
+        if not core_words <= set(_token_list(model_id + " " + model_name)):
             continue
-        if requested_numbers and not requested_numbers.issubset(candidate_tokens):
-            continue
-        extras = _tokens(slug + " " + short_name) - requested_tokens
-        if not all(_is_snapshot_token(token) for token in extras):
-            continue
-        overlap = len(requested_tokens & candidate_tokens) / len(requested_tokens)
-        containment = 0.25 if requested in haystack else 0.0
-        score = overlap + containment
-        if score >= 0.67:
-            scored.append((score, -len(extras), int(item.get("created") or 0), item))
+        best: tuple[int, int] | None = None
+        for label in (slug, short_name):
+            tokens = Counter(_token_list(label))
+            if core_numbers - Counter({t: n for t, n in tokens.items() if _is_number(t)}):
+                continue
+            extras = tokens - every
+            if not all(_is_snapshot_token(token) for token in extras):
+                continue
+            # Prefer the candidate that carries more of the ranked name, so
+            # "Sonar Reasoning (high)" picks sonar-reasoning over sonar.
+            key = (sum((tokens & every).values()), -sum(extras.values()))
+            if best is None or key > best:
+                best = key
+        if best is not None:
+            scored.append((*best, int(item.get("created") or 0), item))
 
     candidates = exact
     if not candidates and scored:
@@ -450,6 +521,15 @@ def _canonical_url(value: str) -> str:
     )
 
 
+def _citation_key(value: str) -> tuple[str, str]:
+    parsed = urllib.parse.urlsplit(value.strip())
+    hostname = (parsed.hostname or "").lower()
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
+    return hostname, path
+
+
 def _safe_source_url(
     value: Any,
     citations: set[str],
@@ -469,7 +549,9 @@ def _safe_source_url(
     ):
         return None
     if canonical not in citations:
-        return None
+        key = _citation_key(canonical)
+        if key not in {_citation_key(item) for item in citations}:
+            return None
     return canonical
 
 
@@ -513,15 +595,151 @@ Rules:
 - Use an official benchmark site, official leaderboard, or primary paper. Do not use
   an aggregator, marketing summary, display-only table, estimate, or composite ranking.
 - Every source URL must be on the approved primary-source domain list above.
+- Prefer the actual leaderboard/results page over a blog post, news story, or summary.
 - Return between {min_ranked_models} and five distinct models from one comparable
-  leaderboard and preserve the source's ranking.
-- Every ranked item must contain an exact source URL provided by web search.
+  leaderboard and preserve the source's ranking. Use one leaderboard URL for all rows
+  whenever that page contains the compared models.
+- Every ranked item must contain a source URL that was actually returned and cited by web search.
 - Use the latest edition. Results published more than {max_evidence_age_days} days
   before today are rejected; report the publication or last-update date.
 - Do not infer, average, estimate, or fabricate a score.
 - If reliable comparable results are unavailable, return an empty ranking.
 """
 
+
+
+def _parse_numeric_score(value: Any) -> float | None:
+    text = str(value or "").strip().replace(",", "")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    return float(match.group(0)) if match else None
+
+
+def _approved_source_url(value: str, allowed_domains: set[str]) -> str:
+    canonical = _canonical_url(value)
+    hostname = (urllib.parse.urlsplit(canonical).hostname or "").lower()
+    if not any(hostname == domain or hostname.endswith("." + domain) for domain in allowed_domains):
+        raise BenchmarkRegistryError(
+            "Official source adapter URL is outside the category allowlist",
+            500,
+            {"url": canonical, "allowed_domains": sorted(allowed_domains)},
+        )
+    return canonical
+
+
+def _fetch_text(url: str, timeout: int = 45) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Helios-Benchmark-Refresh/2.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise BenchmarkRegistryError(
+            "Could not fetch approved official benchmark source",
+            502,
+            {"url": url},
+        ) from exc
+
+
+def _refresh_official_csv_category(
+    category: str,
+    spec: dict[str, Any],
+    config: dict[str, Any],
+    models: list[dict[str, Any]],
+) -> dict[str, Any]:
+    allowed_domains = {
+        str(item).lower() for item in spec.get("allowed_domains", []) if isinstance(item, str)
+    }
+    if not allowed_domains:
+        raise BenchmarkRegistryError("Official CSV adapter requires allowed_domains", 500)
+    data_url = _approved_source_url(str(spec.get("data_url", "")), allowed_domains)
+    source_url = _approved_source_url(str(spec.get("source_url", data_url)), allowed_domains)
+    text = _fetch_text(data_url)
+    reader = csv.DictReader(text.splitlines())
+    rank_column = str(spec.get("rank_column", "Rank"))
+    model_column = str(spec.get("model_column", "Model"))
+    score_column = str(spec.get("score_column", "Score"))
+    ranking: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for position, row in enumerate(reader, start=1):
+        model_name = str(row.get(model_column, "")).strip()
+        key = _normalize(model_name)
+        if not model_name or not key or key in seen:
+            continue
+        seen.add(key)
+        try:
+            rank = int(str(row.get(rank_column, position)).strip())
+        except ValueError:
+            rank = position
+        score_text = str(row.get(score_column, "")).strip()
+        available = resolve_available_model(model_name, models)
+        ranking.append(
+            {
+                "rank": rank,
+                "model_name": model_name,
+                "score": _parse_numeric_score(score_text),
+                "score_text": score_text[:200],
+                "source_url": source_url,
+                "source_title": str(spec.get("benchmark_name", category))[:300],
+                "openrouter_model": available,
+                "available_on_openrouter": available is not None,
+            }
+        )
+        if len(ranking) >= 5:
+            break
+    ranking.sort(key=lambda item: item["rank"])
+    minimum = max(2, min(int(config.get("min_ranked_models", 3)), 5))
+    if len(ranking) < minimum:
+        raise BenchmarkRegistryError(
+            "Official benchmark CSV did not meet the minimum comparable-model quality gate",
+            422,
+            {"category": category, "validated_model_count": len(ranking), "minimum_required": minimum},
+        )
+    selected = next((item for item in ranking if item["available_on_openrouter"]), None)
+    top = ranking[0]
+    benchmark_date = None
+    date_regex = spec.get("date_regex")
+    if isinstance(date_regex, str) and date_regex:
+        page_text = _fetch_text(source_url)
+        match = re.search(date_regex, page_text, flags=re.IGNORECASE)
+        if match:
+            benchmark_date = match.group(1)
+    refreshed_at = utc_now()
+    valid_days = max(1, min(int(config.get("valid_days", 8)), 31))
+    return {
+        "category": category,
+        "benchmark_name": str(spec.get("benchmark_name", category))[:300],
+        "benchmark_date": benchmark_date,
+        "selected_model": selected["openrouter_model"] if selected else None,
+        "selected_rank": selected["rank"] if selected else None,
+        "selected_score": selected["score"] if selected else None,
+        "selected_score_text": selected["score_text"] if selected else None,
+        "selection_source_url": (selected or top)["source_url"],
+        "top_public_model": top["model_name"],
+        "openrouter_match_available": selected is not None,
+        "evidence_model_count": len(ranking),
+        "quality_gate": {
+            "passed": True,
+            "minimum_ranked_models": minimum,
+            "primary_source_required": True,
+            "allowed_domains": sorted(allowed_domains),
+        },
+        "ranking": ranking,
+        "notes": str(spec.get("notes", "Fetched directly from an approved official leaderboard data file."))[:1000],
+        "selection_policy": (
+            "highest_cited_public_rank_available_on_openrouter"
+            if selected
+            else "fresh_public_benchmark_no_openrouter_match"
+        ),
+        "refreshed_at": isoformat(refreshed_at),
+        "valid_until": isoformat(refreshed_at + timedelta(days=valid_days)),
+        "evidence_method": "approved_official_csv",
+        "data_source_url": data_url,
+        "search_model_used": None,
+        "usage": {},
+    }
 
 def _refresh_category(
     category: str,
@@ -666,12 +884,7 @@ def _refresh_category(
             },
         )
     selected = next((item for item in ranking if item["available_on_openrouter"]), None)
-    if not selected:
-        raise BenchmarkRegistryError(
-            "No cited ranked model could be matched to the live OpenRouter catalog",
-            422,
-            {"category": category, "cited_result_count": len(ranking)},
-        )
+    top = ranking[0]
 
     refreshed_at = utc_now()
     valid_days = max(1, min(int(config.get("valid_days", 8)), 31))
@@ -679,13 +892,13 @@ def _refresh_category(
         "category": category,
         "benchmark_name": str(extracted.get("benchmark_name", ""))[:300],
         "benchmark_date": extracted.get("benchmark_date"),
-        "selected_model": selected["openrouter_model"],
-        "selected_rank": selected["rank"],
-        "selected_score": selected["score"],
-        "selected_score_text": selected["score_text"],
-        "selection_source_url": selected["source_url"],
-        "top_public_model": ranking[0]["model_name"],
-        "openrouter_match_available": True,
+        "selected_model": selected["openrouter_model"] if selected else None,
+        "selected_rank": selected["rank"] if selected else None,
+        "selected_score": selected["score"] if selected else None,
+        "selected_score_text": selected["score_text"] if selected else None,
+        "selection_source_url": (selected or top)["source_url"],
+        "top_public_model": top["model_name"],
+        "openrouter_match_available": selected is not None,
         "evidence_model_count": len(ranking),
         "quality_gate": {
             "passed": True,
@@ -695,7 +908,11 @@ def _refresh_category(
         },
         "ranking": ranking,
         "notes": str(extracted.get("notes", ""))[:1000],
-        "selection_policy": "highest_cited_public_rank_available_on_openrouter",
+        "selection_policy": (
+            "highest_cited_public_rank_available_on_openrouter"
+            if selected
+            else "fresh_public_benchmark_no_openrouter_match"
+        ),
         "refreshed_at": isoformat(refreshed_at),
         "valid_until": isoformat(refreshed_at + timedelta(days=valid_days)),
         "search_model_used": response.get("model"),
@@ -706,11 +923,17 @@ def _refresh_category(
 def _needs_refresh(
     category: str, registry: dict[str, Any], config: dict[str, Any], now: datetime
 ) -> bool:
-    """True when a category's evidence is missing, expired, or below the quality gates."""
+    """True when a category's evidence is missing, expiring, or below the quality gates.
+
+    Evidence lasts valid_days (8) and the refresh runs weekly, so a category
+    that is still valid for a day at one run would otherwise expire before the
+    next and stay stale for most of a week. Renew it refresh_ahead_days early.
+    """
     result = registry.get("categories", {}).get(category)
+    ahead = timedelta(days=max(0, min(int(config.get("refresh_ahead_days", 2)), 7)))
     return (
         not isinstance(result, dict)
-        or _is_stale(_category_valid_until(result, registry), now)
+        or _is_stale(_category_valid_until(result, registry), now + ahead)
         or _result_quality_error(category, result, config) is not None
     )
 
@@ -747,20 +970,18 @@ def refresh_registry(
         max_parallel = max(1, min(int(config.get("max_parallel", 3)), 6))
         refreshed: dict[str, Any] = {}
         failures: list[dict[str, Any]] = []
+        def submit_refresh(executor: ThreadPoolExecutor, category: str):
+            spec = enabled[category]
+            if spec.get("source_adapter") == "official_csv":
+                return executor.submit(
+                    _refresh_official_csv_category, category, spec, config, models
+                )
+            return executor.submit(
+                _refresh_category, category, spec, config, openrouter_request, models, today
+            )
 
         with ThreadPoolExecutor(max_workers=max_parallel) as executor:
-            futures = {
-                executor.submit(
-                    _refresh_category,
-                    category,
-                    enabled[category],
-                    config,
-                    openrouter_request,
-                    models,
-                    today,
-                ): category
-                for category in targets
-            }
+            futures = {submit_refresh(executor, category): category for category in targets}
             for future in as_completed(futures):
                 category = futures[future]
                 try:
@@ -772,10 +993,16 @@ def refresh_registry(
                     )
 
         if not refreshed:
+            if not failures and not targets:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    **registry_status(registry_path, config_path),
+                }
             raise BenchmarkRegistryError(
                 "Benchmark refresh produced no valid categories; previous registry was preserved",
                 502,
-                {"failures": failures},
+                {"failures": failures, "attempted_categories": sorted(targets)},
             )
 
         valid_days = max(1, min(int(config.get("valid_days", 8)), 31))
@@ -840,6 +1067,7 @@ def refresh_registry(
             "updated_at": value["updated_at"],
             "valid_until": value["valid_until"],
             "registry_hash": value["registry_hash"],
+            "attempted_categories": sorted(targets),
             "refreshed_categories": sorted(refreshed),
             "preserved_category_count": len(merged_categories) - len(refreshed),
             "dropped_categories": dropped_categories,

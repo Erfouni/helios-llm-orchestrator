@@ -111,4 +111,27 @@ Built-in aliases include `glm`, `gemini`, `gemini-flash`, `claude`, `deepseek`, 
 
 ## Project orchestration
 
-The current HTTP API intentionally exposes primitives rather than a fake project backend. ChatGPT/Codex creates and tracks the task graph in its active session, calls benchmark selection and `/run` for each task, reviews outputs, and integrates accepted results. Persistent `/v2/projects` endpoints are not implemented yet.
+The V2 project API persists projects, dependency-safe task plans, executions, reviews, artifacts, usage, and append-only events in SQLite. Mutating requests accept an `idempotency_key`; updates also accept a `version` for optimistic concurrency.
+
+### Projects
+
+- `GET /v2/projects?limit=<1-200>`
+- `POST /v2/projects`
+- `GET /v2/projects/{project_id}`
+- `POST /v2/projects/{project_id}/plan`
+- `POST /v2/projects/{project_id}/{start|pause|resume|cancel}`
+- `GET /v2/projects/{project_id}/{tasks|artifacts|events|usage}`
+
+Project creation accepts the objective, constraints, acceptance criteria, and optional token, cost, concurrency, and retry limits. Planning accepts a task array with stable dependency references and rejects missing dependencies or cycles.
+
+### Tasks
+
+- `GET /v2/tasks/{task_id}`
+- `POST /v2/tasks/{task_id}/run`
+- `POST /v2/tasks/{task_id}/verify`
+- `POST /v2/tasks/{task_id}/approve`
+- `POST /v2/tasks/{task_id}/request-revision`
+
+Only dependency-ready tasks can run. Execution records the provider-confirmed model, usage, latency, errors, and output artifact hash. Verification and approval are explicit state transitions; a revision request returns the task to a runnable state within its retry budget.
+
+The database uses WAL mode, foreign keys, synchronous durability, startup recovery for orphaned executions, credential redaction before persistence, and allowlisted artifact paths. The hosted service takes daily integrity-checked database backups.

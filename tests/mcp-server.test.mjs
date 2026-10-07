@@ -16,6 +16,8 @@ const PAYLOADS = {
   "/benchmarks/refresh": { refreshed: false, reason: "registry is fresh" },
   "/route": { category: "coding", confidence: 0.9, needs_confirmation: false, selection: null },
   "/decide": { answers: { done: { type: "noul", noul: 0.97 } }, usage: { cost: 0.00003 } },
+  "/v2/global-context": { version: 4, context: { language: "fa" } },
+  "/manus/tasks/task-1": { provider: "manus", task_id: "task-1", status: "running" },
 };
 
 const GATEWAY_MAX_OUTPUT_TOKENS = 16000;
@@ -111,7 +113,7 @@ after(async () => {
 
 test("every tool advertises an object output schema", async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, 20);
   for (const tool of tools) {
     assert.equal(tool.outputSchema?.type, "object", `${tool.name} has no output schema`);
   }
@@ -121,6 +123,8 @@ for (const [name, args, path] of [
   ["helios_get_benchmark_registry", {}, "/benchmarks"],
   ["helios_select_benchmark_model", { category: "coding" }, "/benchmarks/select"],
   ["helios_refresh_benchmarks", {}, "/benchmarks/refresh"],
+  ["helios_get_global_context", {}, "/v2/global-context"],
+  ["manus_get_task", { task_id: "task-1" }, "/manus/tasks/task-1"],
 ]) {
   test(`${name} returns the gateway payload`, async () => {
     const result = await client.callTool({ name, arguments: args });

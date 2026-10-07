@@ -3,6 +3,7 @@
 !.env.example
 *.dpapi
 node_modules/
+.npm-cache/
 logs/
 data/runtime/
 *.log
@@ -12,3 +13,9 @@ __pycache__/
 *.py[cod]
 coverage/
 dist/
+data/
+*.db
+*.db-shm
+*.db-wal
+artifacts/
+backups/
