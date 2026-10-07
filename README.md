@@ -99,9 +99,12 @@ Helios performs **web search only** for registry updates; it does not run privat
 - come from a per-category allowlist of official leaderboards, benchmark sites, or primary papers;
 - provide one comparable ranking with at least three distinct models;
 - include citation URLs returned by web search;
+- be no older than `max_evidence_age_days` (180 by default) when the source gives a date;
 - avoid display-only tables, aggregators, estimates, and fabricated/composite scores.
 
-If evidence is stale, insufficient, or the ranked models are unavailable on OpenRouter, Helios reports the limitation instead of claiming a strongest model.
+A ranked name only maps to the same OpenRouter model or a dated snapshot of it: a leaderboard's "GPT-5" never stands for `gpt-5-mini`, `gpt-5.1`, or an image variant. If evidence is stale, insufficient, or the ranked models are unavailable on OpenRouter, Helios reports the limitation instead of claiming a strongest model.
+
+A stale-only refresh pays only for categories that are missing, expired, or below the quality gates, and categories removed from the config are dropped from the registry.
 
 ## Quickstart (five minutes, no installer)
 

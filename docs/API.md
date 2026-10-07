@@ -70,7 +70,7 @@ curl -X POST http://127.0.0.1:3188/benchmarks/refresh \
   -d '{"only_if_stale":true}'
 ```
 
-The installer schedules the same operation for Monday at 03:00 local time. Each category has its own `valid_until`; a partial refresh cannot make preserved old evidence appear fresh. If every category fails validation, the published registry remains untouched.
+The installer schedules the same operation for Monday at 03:00 local time. A stale-only refresh searches only the categories that are missing, expired, or below the quality gates; categories no longer enabled in the config are dropped. Evidence dated more than `max_evidence_age_days` (180) before the refresh is rejected. Each category has its own `valid_until`; a partial refresh cannot make preserved old evidence appear fresh. If every category fails validation, the published registry remains untouched. Only one refresh runs at a time, including the scheduled one.
 
 ## Friendly aliases
 
