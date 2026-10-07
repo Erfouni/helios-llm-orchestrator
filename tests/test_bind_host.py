@@ -11,6 +11,9 @@ import urllib.request
 
 
 SERVER = Path(__file__).resolve().parents[1] / "agent" / "server.py"
+# A system proxy (HTTP_PROXY, or Windows Internet settings) would otherwise get
+# the [::1] request: urllib's bypass list never matches a bracketed IPv6 host.
+DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def ipv6_loopback_available() -> bool:
@@ -70,7 +73,7 @@ class BindHostTests(unittest.TestCase):
                 _stdout, stderr = process.communicate()
                 self.fail(f"gateway exited with {process.returncode}:\n{stderr[-800:]}")
             try:
-                with urllib.request.urlopen(url + "/health", timeout=1) as response:
+                with DIRECT.open(url + "/health", timeout=1) as response:
                     self.assertEqual(response.status, 200)
                     return json.load(response)
             except (urllib.error.URLError, ConnectionError, socket.timeout):
