@@ -11,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 from agent.project_memory import ProjectStore
 
@@ -20,6 +21,43 @@ BACKUP = REPO / "scripts" / "backup-memory.py"
 RESTORE = REPO / "scripts" / "restore-memory.py"
 
 
+class BackupPlatformTests(unittest.TestCase):
+    def test_backup_rejects_unsupported_platform_before_creating_output(self):
+        spec = importlib.util.spec_from_file_location("backup_platform_test", BACKUP)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for platform in ("win32", "darwin"):
+                with self.subTest(platform=platform), mock.patch.object(sys, "platform", platform):
+                    stderr = io.StringIO()
+                    with mock.patch.object(sys, "stderr", stderr):
+                        result = module.main(["--data-dir", str(root / "data"), "--backup-dir", str(root / "backups")])
+                    self.assertEqual(result, 1)
+                    self.assertIn("require Linux", stderr.getvalue())
+                    self.assertNotIn("Traceback", stderr.getvalue())
+                    self.assertEqual(list(root.iterdir()), [])
+
+    def test_restore_rejects_unsupported_platform_before_staging(self):
+        spec = importlib.util.spec_from_file_location("restore_platform_test", RESTORE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for platform in ("win32", "darwin"):
+                with self.subTest(platform=platform), mock.patch.object(sys, "platform", platform):
+                    stderr = io.StringIO()
+                    with mock.patch.object(sys, "stderr", stderr), mock.patch.object(
+                        module.tempfile, "TemporaryDirectory", side_effect=AssertionError("Must reject before staging")
+                    ):
+                        result = module.main([str(root / "archive.tar.gz"), "--destination", str(root / "restored")])
+                    self.assertEqual(result, 1)
+                    self.assertIn("require Linux", stderr.getvalue())
+                    self.assertNotIn("Traceback", stderr.getvalue())
+                    self.assertEqual(list(root.iterdir()), [])
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Full recovery requires Linux filesystem primitives")
 class BackupMemoryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

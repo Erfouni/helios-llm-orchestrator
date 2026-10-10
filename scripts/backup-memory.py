@@ -27,6 +27,13 @@ class BackupError(Exception):
     pass
 
 
+def require_supported_platform() -> None:
+    if not sys.platform.startswith("linux") or os.name != "posix" or not all(
+        hasattr(os, name) for name in ("O_NOFOLLOW", "O_DIRECTORY", "geteuid")
+    ):
+        raise BackupError("Full backup and restore require Linux filesystem primitives")
+
+
 def absolute(path: str | Path) -> Path:
     # resolve() would hide symlinks before the confinement check.
     return Path(os.path.abspath(os.path.expanduser(str(path))))
@@ -49,8 +56,7 @@ def no_symlinks(path: Path) -> None:
 @contextmanager
 def directory_fd(path: Path):
     """Walk every component with O_NOFOLLOW, including the configured root."""
-    if os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
-        raise BackupError("Secure backup and restore require POSIX O_NOFOLLOW support")
+    require_supported_platform()
     path = absolute(path)
     descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -89,6 +95,7 @@ def checksum(path: Path) -> dict:
 
 
 def private_directory(path: Path) -> None:
+    require_supported_platform()
     path = absolute(path)
     descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -332,6 +339,7 @@ def prune(backups: Path, keep: int) -> None:
 
 
 def create_backup(options) -> dict:
+    require_supported_platform()
     for source in (options.artifact_root, options.state_dir, options.memory_root):
         if source and (options.backup_dir == source or source in options.backup_dir.parents):
             raise BackupError("Backup destination must not be inside a captured source root")

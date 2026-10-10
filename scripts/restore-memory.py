@@ -105,6 +105,7 @@ def rebase_artifacts(stage: Path, manifest: dict) -> None:
 
 def publish_directory(staged: Path, destination: Path) -> None:
     """Use Linux renameat2 so a racing creator can never be overwritten."""
+    backup.require_supported_platform()
     library = ctypes.CDLL(None, use_errno=True)
     rename = getattr(library, "renameat2", None)
     if rename is None:
@@ -122,6 +123,7 @@ def publish_directory(staged: Path, destination: Path) -> None:
 
 
 def restore(path: Path, destination: Path | None = None) -> dict:
+    backup.require_supported_platform()
     # Validate before even creating the destination's parent.
     with tempfile.TemporaryDirectory(prefix="helios-validate-") as temporary:
         validated = Path(temporary) / "payload"
