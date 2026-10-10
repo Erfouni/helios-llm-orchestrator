@@ -43,7 +43,13 @@
       ],
       "allowed_domains": [
         "arcprize.org"
-      ]
+      ],
+      "source_adapter": "arc_agi_json",
+      "benchmark_name": "ARC-AGI-2 Semi-Private",
+      "data_url": "https://arcprize.org/media/data/leaderboard/v2.json",
+      "source_url": "https://arcprize.org/leaderboard",
+      "dataset_id": "v2_Semi_Private",
+      "notes": "Official ARC Prize JSON; displayed CoT evaluations only, best configuration per model group. Exact evaluated settings are required at selection."
     },
     "coding": {
       "description": "Writing, debugging, or reviewing backend code, scripts, or other software",

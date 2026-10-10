@@ -1,6 +1,6 @@
 {
   "name": "helios-llm-orchestrator",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Local-first MCP multi-LLM orchestrator with task decomposition and benchmark-guided OpenRouter routing.",
   "type": "module",
@@ -9,7 +9,7 @@
   },
   "scripts": {
     "mcp:start": "node mcp/mcp-server.mjs",
-    "check": "node --check mcp/mcp-server.mjs && node --check scripts/scan-secrets.mjs && node --check scripts/run-python.mjs && node scripts/run-python.mjs -m py_compile agent/server.py agent/project_memory.py agent/benchmark_registry.py scripts/refresh-benchmarks.py scripts/backup-memory.py",
+    "check": "node --check mcp/mcp-server.mjs && node --check scripts/scan-secrets.mjs && node --check scripts/run-python.mjs && node scripts/run-python.mjs -m py_compile agent/server.py agent/project_memory.py agent/benchmark_registry.py scripts/refresh-benchmarks.py scripts/backup-memory.py agent/execution_runtime.py agent/provider_transport.py agent/task_queue.py scripts/restore-memory.py agent/model_parameters.py",
     "test": "npm run check && node --test tests/mcp-server.test.mjs && node scripts/run-python.mjs -m unittest discover -s tests -p test_*.py",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=high"

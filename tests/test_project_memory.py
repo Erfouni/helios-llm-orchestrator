@@ -52,6 +52,17 @@ class ProjectMemoryTests(unittest.TestCase):
             ]
         }
 
+    def host_evidence(self, task):
+        artifact = next(item for item in self.store.list_artifacts(task["project_id"])["artifacts"]
+                        if item["id"] == task["result_artifact_id"])
+        return {
+            "artifact_id": artifact["id"], "checksum_sha256": artifact["checksum_sha256"],
+            "checks": [{"criterion": criterion, "passed": True, "details": "Output checked against supplied source facts"}
+                       for criterion in task["acceptance_criteria"]],
+            "host_check": {"command": "python -m unittest acceptance", "exit_code": 0,
+                           "output": "Acceptance checks passed"},
+        }
+
     def test_create_is_idempotent_and_redacts_credentials(self):
         first = self.create_project(source_brief="Bearer abcdefghijklmnop")
         replay = self.create_project(source_brief="Bearer abcdefghijklmnop")
@@ -125,7 +136,7 @@ class ProjectMemoryTests(unittest.TestCase):
 
         verified = self.store.verify_task(
             first["id"],
-            {"decision": "pass", "evidence": ["criterion checked"]},
+            {"decision": "pass", "evidence": self.host_evidence(completed)},
             "verify-1",
             completed["version"],
         )
@@ -149,7 +160,7 @@ class ProjectMemoryTests(unittest.TestCase):
         )
         gated = self.store.verify_task(
             second["id"],
-            {"decision": "pass", "evidence": ["reviewed"]},
+            {"decision": "pass", "evidence": self.host_evidence(completed_second)},
             "verify-2",
             completed_second["version"],
         )
@@ -172,7 +183,7 @@ class ProjectMemoryTests(unittest.TestCase):
         events = self.store.list_events(project["id"])["events"]
         self.assertIn("project.completed", [event["event_type"] for event in events])
 
-    def test_restart_recovers_orphaned_execution_without_duplicate_call(self):
+    def test_second_store_preserves_running_execution_without_duplicate_call(self):
         project = self.create_project()
         planned = self.store.plan_project(
             project["id"], self.task_plan(), "plan-1", project["version"]
@@ -194,13 +205,14 @@ class ProjectMemoryTests(unittest.TestCase):
             Path(self.tempdir.name) / "artifacts",
         )
         recovered = recovered_store.get_task(task["id"])
-        self.assertEqual(recovered["status"], "ready")
+        self.assertEqual(recovered["status"], "running")
+        self.assertEqual(recovered_store.recover_orphaned_tasks(), 0)
         duplicate = recovered_store.prepare_task_execution(
             task["id"], {"model": "provider/model"}, "run-1", recovered["version"]
         )
         self.assertTrue(duplicate["duplicate"])
         self.assertEqual(duplicate["execution_id"], prepared["execution_id"])
-        self.assertEqual(duplicate["status"], "orphaned")
+        self.assertEqual(duplicate["status"], "running")
 
     def test_redact_preserves_usage_fields_but_removes_secrets(self):
         value = redact(

@@ -106,7 +106,7 @@ class RouteTaskTests(unittest.TestCase):
             server, "openrouter_request", return_value=jev_reply({"category": answer})
         ) as request, mock.patch.object(
             server, "select_benchmark_model", return_value=selection
-        ) as select:
+        ) as select, mock.patch.object(server, "get_models", return_value=[]):
             result = server.route_task({"task": "Fix the login API", **data})
         return result, request, select
 
@@ -116,7 +116,7 @@ class RouteTaskTests(unittest.TestCase):
         )
         criteria = request.call_args.args[2]["questions"]["category"]["criteria"]
         self.assertEqual(criteria, {"coding": "Writing code", "frontend": "Building interfaces"})
-        select.assert_called_once_with("coding")
+        select.assert_called_once_with("coding", catalog=[], requirements=None)
         self.assertEqual(result["category"], "coding")
         self.assertFalse(result["needs_confirmation"])
         self.assertEqual(result["selection"]["model"]["id"], "provider/coder")
@@ -134,7 +134,7 @@ class RouteTaskTests(unittest.TestCase):
         result, _request, select = self.route(
             {"choice": "frontend", "confidence": 0.55}, min_confidence=0.5
         )
-        select.assert_called_once_with("frontend")
+        select.assert_called_once_with("frontend", catalog=[], requirements=None)
         self.assertFalse(result["needs_confirmation"])
 
     def test_an_unknown_category_from_jev_is_502(self):
@@ -146,7 +146,7 @@ class RouteTaskTests(unittest.TestCase):
         stale = server.BenchmarkRegistryError("stale", 503, {"category": "coding"})
         with mock.patch.object(server, "load_config", return_value=CONFIG), mock.patch.object(
             server, "openrouter_request", return_value=jev_reply({"category": {"choice": "coding", "confidence": 0.9}})
-        ), mock.patch.object(server, "select_benchmark_model", side_effect=stale):
+        ), mock.patch.object(server, "select_benchmark_model", side_effect=stale), mock.patch.object(server, "get_models", return_value=[]):
             result = server.route_task({"task": "Fix the login API"})
         self.assertIsNone(result["selection"])
         self.assertEqual(result["selection_error"]["status"], 503)

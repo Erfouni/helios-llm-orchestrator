@@ -134,4 +134,53 @@ Project creation accepts the objective, constraints, acceptance criteria, and op
 
 Only dependency-ready tasks can run. Execution records the provider-confirmed model, usage, latency, errors, and output artifact hash. Verification and approval are explicit state transitions; a revision request returns the task to a runnable state within its retry budget.
 
-The database uses WAL mode, foreign keys, synchronous durability, startup recovery for orphaned executions, credential redaction before persistence, and allowlisted artifact paths. The hosted service takes daily integrity-checked database backups.
+The database uses WAL mode, foreign keys, synchronous durability, credential redaction and confined artifact paths. Opening another client never resets active work. Expired execution leases become blocked and require billing reconciliation, rather than issuing a second paid request.
+
+### 2.2 execution contract
+
+Project execution validates the complete request and live model capabilities before consuming an attempt. It reserves conservative input/output token and dollar headroom atomically, checks per-project concurrency, and pins provider maximum prices. Unknown pricing refuses dispatch. Separately billed reasoning needs an explicit adapter and is refused by budgeted text execution. Actual provider overages are recorded and block further work; local limits cannot reverse provider billing.
+
+All paid outbound OpenRouter calls (including Compare children, Jev and refresh) and Manus creation share process-independent capacity slots. `GET /usage` exposes the gateway ledger: known USD and unknown-cost call counts are separate; Manus credits are not converted to USD. V2 calls appear in both the global and project views, so do not add the totals together. Prompts, credentials and response bodies are excluded from the global ledger.
+
+Task `timeout_seconds` reaches an isolated outbound HTTP exchange with an overall deadline covering connection, headers and body. Timeout kills the local transport, but does not prove provider-side cancellation. Ambiguous calls retain budget reservations. Cancellation is terminal even if a late provider response arrives; known late usage is counted once.
+
+`POST /v2/tasks/{task_id}/enqueue` accepts the same body/version/idempotency key as `/run` and returns HTTP 202 with a durable job. Only explicitly queued tasks run in background. Existing projects remain host-driven. Queue jobs can be inspected with `GET /v2/jobs/{job_id}` and `GET /v2/projects/{project_id}/jobs`. Job `succeeded` means execution was recorded, while the task still requires verification. Pause stops new dispatch; cancellation fences late completion. Restart does not reissue an uncertain claimed job.
+
+`GET /v2/executions/{execution_id}` exposes execution metadata, reservation and billing status. To settle an uncertain outcome, `POST /v2/executions/{execution_id}/reconcile` requires an idempotency key and:
+
+```json
+{"billing_evidence":{"source":"provider statement","reference":"generation-id","details":"Final usage confirmed"},"cost_usd":0.002,"tokens":420}
+```
+
+Alternatively use `confirmed_not_charged: true`; restarting a no-charge attempt also requires explicit `retry_authorized: true`. Reconciliation records final charges by delta and releases the reservation. It never revives a cancelled project. It is a trusted authenticated host assertion, not an independently authenticated billing provider.
+
+The task prompt includes project scope/constraints and checksum-verified predecessor artifacts with bounded excerpts and provenance. All-chat context is never sent implicitly. Scoped global context requires both `include_global_context: true` and `global_context_scope: "project:<project_id>"`, matching the stored scope.
+
+Verification `decision: "pass"` now requires an evidence **object** bound to the current artifact and every acceptance criterion:
+
+```json
+{"decision":"pass","evidence":{"artifact_id":"<result-artifact-id>","checksum_sha256":"<sha256>","checks":[{"criterion":"<exact acceptance criterion>","passed":true,"details":"Observed test result"}],"host_check":{"command":"npm test","exit_code":0,"output":"All checks passed"}}}
+```
+
+Independent model reviews must refer to a real persisted review artifact from a different confirmed model family. A client-written model label is insufficient. Host check evidence is supplied by the authenticated orchestrator; actor names are audit labels, not separate identities. Human approval still requires actual user approval, and cannot bypass missing verification evidence.
+
+`GET /health` is process liveness and returns component status and `ready`; `GET /ready` returns 503 if required local components are unhealthy. Partial or stale benchmark coverage is reported separately. `GET /benchmarks/select` accepts JSON-encoded `requirements`; `/route` accepts the same object. Selection checks the live model catalog's context, modalities, pricing and supported reasoning efforts, and returns `evaluation_settings`, `execution_parameters` and rejected candidates. Carry the returned execution parameters into the model call; do not attribute another setting's benchmark score to it.
+
+The official ARC-AGI-2 adapter reads structured source data without a paid extraction call. All adapters require dated, comparable numerical evidence; failed refreshes preserve the previous evidence without renewing its expiry. Obsolete LongBench evidence remains blocked. See [backup and restore](BACKUP_RESTORE.md) for complete archive coverage, isolated restore validation and external-destination configuration.
+
+### Executable settings and transport lifetime
+
+Both MCP selection and routing accept `requirements`. The shared run/enqueue
+contract accepts `max_tokens`, `temperature`, `top_p` and `reasoning_effort` as
+top-level fields. Evaluated settings outside this contract are ineligible even
+when a provider supports them. Requested output bounds are returned in
+`execution_parameters`; unsupported direct parameters are rejected before dispatch.
+
+The HTTP child owns its deadline and, on Linux, a parent-death signal. POSIX
+children inherit the outbound slot lock so gateway death cannot immediately
+reissue its capacity while the child remains alive. Linux parent-death behavior
+is covered by a real socket/process regression; Windows crash behavior has not
+been validated by this release's Linux test run. Pre-dispatch queue failures
+can fail or retry safely without leaving an unreconcilable execution reservation.
+
+The global provider ledger records calls observed by 2.2 onward. It cannot reconstruct historical standalone calls. Existing project usage remains intact; do not treat an initially empty new global ledger as proof that prior usage was zero.

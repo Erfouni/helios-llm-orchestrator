@@ -1,5 +1,5 @@
 [Unit]
-Description=Back up Helios SQLite project memory
+Description=Back up Helios database, artifacts, benchmarks and canonical memory
 After=helios.service
 
 [Service]
@@ -7,11 +7,16 @@ Type=oneshot
 User=helios
 Group=helios-runtime
 WorkingDirectory=/opt/helios/current
-EnvironmentFile=/etc/helios/helios.env
+Environment=HELIOS_DATA_DIR=/var/lib/helios
+Environment=HELIOS_STATE_DIR=/var/lib/helios/runtime
+Environment=HELIOS_MEMORY_ROOT=/var/lib/helios/canonical-memory
+Environment=HELIOS_BACKUP_REQUIRE_MEMORY=1
+EnvironmentFile=-/etc/helios/backup.env
 StateDirectory=helios
 StateDirectoryMode=0750
-UMask=0027
+UMask=0077
 ExecStart=/usr/bin/python3 /opt/helios/current/scripts/backup-memory.py
+TimeoutStartSec=10min
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
