@@ -82,12 +82,12 @@ Available now:
 - Direct mode for one named model and Compare mode for two to four models;
 - live OpenRouter model discovery;
 - weekly, citation-backed public benchmark discovery with per-category freshness;
-- restart-safe SQLite/WAL project memory and a persistent dependency scheduler;
+- restart-safe SQLite/WAL project memory and an explicit durable background queue;
 - start, pause, resume, cancel, verification, approval, and revision workflows;
 - enforced token, cost, concurrency, and retry controls;
 - append-only event, execution, usage, and artifact histories;
 - loopback-only HTTP with MCP-over-stdio or authenticated remote MCP access;
-- native startup automation, daily database backups, CloudWatch logging, and Monday 03:00 benchmark refresh.
+- native startup automation, complete checksummed backups, CloudWatch logging, and scheduled benchmark refresh.
 
 The implemented lifecycle follows [Helios V2](docs/HELIOS_V2_TECHNICAL_SPEC.md) while retaining the original Direct, Compare, and benchmark-routing APIs.
 
@@ -98,7 +98,7 @@ Helios performs **web search only** for registry updates; it does not run privat
 - come from a per-category allowlist of official leaderboards, benchmark sites, or primary papers;
 - provide one comparable ranking with at least three distinct models;
 - include citation URLs returned by web search;
-- be no older than `max_evidence_age_days` (180 by default) when the source gives a date;
+- be no older than `max_evidence_age_days` (180 by default); a missing or future evidence date fails validation;
 - avoid display-only tables, aggregators, estimates, and fabricated/composite scores.
 
 A ranked name only maps to the same OpenRouter model or a dated snapshot of it: a leaderboard's "GPT-5" never stands for `gpt-5-mini`, `gpt-5.1`, or an image variant. If evidence is stale, insufficient, or the ranked models are unavailable on OpenRouter, Helios reports the limitation instead of claiming a strongest model.
@@ -163,7 +163,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:3188/benchmarks/refresh -Content
 
 The registry is written to `data/runtime/` in the clone (on macOS, `~/Library/Application Support/Helios`); set `HELIOS_STATE_DIR` to keep it elsewhere.
 
-Finally, add [mcp/client-config.example.json](mcp/client-config.example.json) to your MCP client with the absolute path of your clone. The client should list twenty Helios tools. When you want Helios to start at login and refresh its benchmarks every Monday, run the installer below; it keeps the key in macOS Keychain or Windows DPAPI instead of the environment.
+Finally, add [mcp/client-config.example.json](mcp/client-config.example.json) to your MCP client with the absolute path of your clone. The client should list twenty-two Helios tools. When you want Helios to start at login and refresh its benchmarks every Monday, run the installer below; it keeps the key in macOS Keychain or Windows DPAPI instead of the environment.
 
 ## Installation
 

@@ -31,6 +31,21 @@ before(async () => {
   gateway = http.createServer((req, res) => {
     const [path, query = ""] = req.url.split("?");
     requests.push({ method: req.method, path, query });
+    if (path.startsWith('/v2/executions/')) {
+      res.writeHead(200, {'Content-Type':'application/json'});
+      res.end(JSON.stringify({billing_status:'known'}));
+      return;
+    }
+    if (path.startsWith('/v2/tasks/') && ['enqueue', 'verify'].includes(path.split('/').at(-1))) {
+      let raw = '';
+      req.on('data', chunk => raw += chunk);
+      req.on('end', () => {
+        runBodies.push({path, body: JSON.parse(raw)});
+        res.writeHead(200, {'Content-Type':'application/json'});
+        res.end(JSON.stringify({status: path.endsWith('enqueue') ? 'queued' : 'succeeded'}));
+      });
+      return;
+    }
     if (path === "/route" || path === "/decide") {
       let raw = "";
       req.on("data", (chunk) => (raw += chunk));
@@ -113,10 +128,56 @@ after(async () => {
 
 test("every tool advertises an object output schema", async () => {
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 20);
+  assert.equal(tools.length, 22);
   for (const tool of tools) {
     assert.equal(tool.outputSchema?.type, "object", `${tool.name} has no output schema`);
   }
+});
+
+for (const [name, args, suffix] of [
+  ['helios_get_execution', {}, ''],
+  ['helios_reconcile_execution', {idempotency_key:'settle',cost_usd:0.01,tokens:20,billing_evidence:{source:'statement',reference:'gen-1',details:'verified final bill'}}, '/reconcile'],
+]) {
+  test(`${name} exposes execution billing recovery`, async () => {
+    requests.length=0;
+    const execution_id='22222222-2222-4222-8222-222222222222';
+    const reply=await client.callTool({name,arguments:{execution_id,...args}});
+    assert.equal(reply.isError,undefined,reply.content?.[0]?.text);
+    assert.equal(reply.structuredContent.billing_status,'known');
+    assert.equal(requests[0].path,`/v2/executions/${execution_id}${suffix}`);
+  });
+}
+
+test('durable execution can enqueue with evaluated Max settings', async () => {
+  runBodies.length = 0;
+  const task_id = '11111111-1111-4111-8111-111111111111';
+  const result = await client.callTool({name:'helios_run_task', arguments:{task_id,version:1,idempotency_key:'queue-1',model:'test/model',max_tokens:100,reasoning_effort:'max',temperature:0.2,top_p:0.8,enqueue:true}});
+  assert.equal(result.isError,undefined,result.content?.[0]?.text);
+  assert.equal(result.structuredContent.status,'queued');
+  assert.equal(runBodies[0].path,`/v2/tasks/${task_id}/enqueue`);
+  assert.equal(runBodies[0].body.reasoning_effort,'max');
+  assert.equal(runBodies[0].body.temperature,0.2);
+  assert.equal(runBodies[0].body.top_p,0.8);
+});
+
+test('benchmark routing forwards execution requirements on both interfaces', async () => {
+  const requirements={max_tokens:100,requested_parameters:{temperature:0.2},input_tokens:300,max_cost_usd:0.01};
+  requests.length=0;
+  let reply=await client.callTool({name:'helios_select_benchmark_model',arguments:{category:'coding',requirements}});
+  assert.equal(reply.isError,undefined,reply.content?.[0]?.text);
+  assert.deepEqual(JSON.parse(new URLSearchParams(requests[0].query).get('requirements')),requirements);
+  runBodies.length=0;
+  reply=await client.callTool({name:'helios_route_task',arguments:{task:'Fix bug',requirements}});
+  assert.equal(reply.isError,undefined,reply.content?.[0]?.text);
+  assert.deepEqual(runBodies[0].body.requirements,requirements);
+});
+
+test('task verification forwards artifact-bound evidence object', async () => {
+  runBodies.length = 0;
+  const evidence = {artifact_id:'artifact-1',checksum_sha256:'a'.repeat(64),checks:[{criterion:'works',passed:true,details:'test passed'}],host_check:{command:'npm test',exit_code:0,output:'passed'}};
+  const result = await client.callTool({name:'helios_review_task',arguments:{task_id:'11111111-1111-4111-8111-111111111111',action:'verify',version:3,idempotency_key:'verify-1',decision:'pass',evidence}});
+  assert.equal(result.isError,undefined,result.content?.[0]?.text);
+  assert.deepEqual(runBodies[0].body.evidence,evidence);
 });
 
 for (const [name, args, path] of [

@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+try:
+    from agent.model_parameters import validate_parameters, output_limit, PARAMETERS
+except ModuleNotFoundError:
+    from model_parameters import validate_parameters, output_limit, PARAMETERS
+
 import hmac
 import json
 import os
@@ -19,6 +24,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from contextlib import nullcontext
+from datetime import datetime, timezone
+
+try:
+    from agent.execution_runtime import ProviderRuntime, CapacityError, execution_context, quote_text_request
+    from agent.task_queue import TaskQueue
+except ModuleNotFoundError:
+    from execution_runtime import ProviderRuntime, CapacityError, execution_context, quote_text_request
+    from task_queue import TaskQueue
 
 try:
     from agent.benchmark_registry import (
@@ -54,7 +68,7 @@ MODULE_DIR = Path(__file__).resolve().parent
 BASE_DIR = MODULE_DIR.parent if (MODULE_DIR.parent / "config").exists() else MODULE_DIR
 ENV_FILE = BASE_DIR / ".env"
 # Keep in step with package.json; tests/test_version.py checks the two match.
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MANUS_BASE_URL = "https://api.manus.ai/v2"
 MODEL_CACHE_TTL_SECONDS = 600
@@ -65,6 +79,8 @@ _model_cache: dict[str, Any] = {"loaded_at": 0.0, "models": []}
 _model_lock = threading.Lock()
 _project_store: ProjectStore | None = None
 _project_store_lock = threading.Lock()
+_task_queue = None
+_task_queue_lock = threading.Lock()
 
 
 class GatewayError(Exception):
@@ -125,7 +141,6 @@ KEYCHAIN_SERVICE = os.environ.get("OPENROUTER_KEYCHAIN_SERVICE", "helios-multimo
 KEYCHAIN_ACCOUNT = os.environ.get("OPENROUTER_KEYCHAIN_ACCOUNT", "openrouter-api-key")
 MANUS_BASE_URL = os.environ.get("MANUS_API_BASE_URL", DEFAULT_MANUS_BASE_URL).rstrip("/")
 MANUS_API_KEY_FILE = os.environ.get("MANUS_API_KEY_FILE", "").strip()
-_paid_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
 
 if HOST not in {"127.0.0.1", "::1", "localhost"}:
     raise RuntimeError("Helios must bind to loopback only (127.0.0.1 or ::1)")
@@ -138,6 +153,60 @@ def project_store() -> ProjectStore:
             if _project_store is None:
                 _project_store = store_from_environment(BASE_DIR)
     return _project_store
+
+
+def provider_runtime() -> ProviderRuntime:
+    return ProviderRuntime(project_store().database_path, MAX_CONCURRENT_REQUESTS)
+
+
+def task_queue() -> TaskQueue:
+    global _task_queue
+    store = project_store()
+    with _task_queue_lock:
+        if _task_queue is None or _task_queue.store is not store:
+            _task_queue = TaskQueue(store, execute_project_task, validate_task_request)
+    return _task_queue
+
+
+def provider_json(provider, operation, url, method, headers, payload, timeout, *, paid):
+    """Keep capacity until the actual child exits; timeout has unknown billing."""
+    if not isinstance(timeout, (int, float)) or not 0 < timeout <= 3600:
+        raise GatewayError('timeout_seconds must be between 0 and 3600')
+    context = (provider_runtime().call(provider, operation,
+               model=(payload or {}).get('model', (payload or {}).get('agent_profile')))
+               if paid else nullcontext(None))
+    try:
+        with context as record:
+            try:
+                process = subprocess.run(
+                    [sys.executable, str(MODULE_DIR / 'provider_transport.py')],
+                    input=json.dumps({'url': url, 'method': method, 'headers': headers,
+                                      'payload': payload, 'timeout': timeout, 'parent_pid': os.getpid()}),
+                    text=True, capture_output=True, timeout=timeout, check=False,
+                    **({'pass_fds': (record.lock_fd,)} if os.name != 'nt' and record is not None else {}),
+                )
+            except subprocess.TimeoutExpired:
+                raise GatewayError('Provider deadline exceeded; billing may be unknown', 504,
+                                   code='provider_timeout', retryable=False) from None
+            if process.returncode == 124:
+                raise GatewayError('Provider deadline exceeded; billing may be unknown', 504, code='provider_timeout')
+            if process.returncode:
+                raise GatewayError('Provider transport failed', 502, code='provider_transport_error')
+            try:
+                envelope = json.loads(process.stdout)
+            except (ValueError, TypeError):
+                raise GatewayError('Provider transport returned invalid data', 502) from None
+            if envelope.get('error'):
+                upstream = envelope.get('upstream_status')
+                raise GatewayError('Provider request failed', 502,
+                                   details={'upstream_status': upstream}, code=envelope['error'],
+                                   retryable=upstream in {408, 429, 500, 502, 503, 504})
+            response = envelope['response']
+            if record is not None:
+                record.result(response)
+            return response
+    except CapacityError as exc:
+        raise GatewayError(str(exc), 429, code=exc.code, retryable=True) from exc
 
 STATIC_ALIASES = {
     "glm": os.environ.get("DEFAULT_GLM_MODEL", "z-ai/glm-5.2"),
@@ -221,41 +290,10 @@ def manus_request(
     url = MANUS_BASE_URL + "/" + operation.lstrip("/")
     if query:
         url += "?" + urllib.parse.urlencode(query)
-    request = urllib.request.Request(
-        url,
-        data=None if payload is None else json.dumps(payload).encode("utf-8"),
-        headers={
-            "x-manus-api-key": manus_api_key(),
-            "Content-Type": "application/json",
-            "User-Agent": f"Helios/{VERSION} ManusProvider",
-        },
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            value = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            upstream = json.loads(raw)
-        except json.JSONDecodeError:
-            upstream = raw[:2000]
-        raise GatewayError(
-            "Manus request failed",
-            502,
-            {"upstream_status": exc.code, "upstream": upstream},
-            code="manus_upstream_error",
-            retryable=exc.code in {408, 429, 500, 502, 503, 504},
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise GatewayError(
-            "Could not reach Manus", 502, code="manus_unreachable", retryable=True
-        ) from exc
-    except json.JSONDecodeError as exc:
-        raise GatewayError("Manus returned invalid JSON", 502) from exc
-    if not isinstance(value, dict):
-        raise GatewayError("Manus returned an invalid response", 502)
-    return value
+    return provider_json('manus', operation, url, method,
+        {'x-manus-api-key': manus_api_key(), 'Content-Type': 'application/json',
+         'User-Agent': f'Helios/{VERSION} ManusProvider'}, payload, timeout,
+        paid=method == 'POST' and operation in {'task.create', 'task.update', 'task.message'})
 
 
 LOOPBACK_HOST_NAMES = {"127.0.0.1", "localhost", "[::1]"}
@@ -300,30 +338,8 @@ def openrouter_request(
         "HTTP-Referer": "https://localhost.invalid/helios",
         "X-OpenRouter-Title": "Helios LLM Orchestrator",
     }
-    request = urllib.request.Request(
-        OPENROUTER_BASE_URL + path,
-        data=None if payload is None else json.dumps(payload).encode("utf-8"),
-        headers=headers,
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            upstream = json.loads(raw)
-        except json.JSONDecodeError:
-            upstream = raw[:2000]
-        raise GatewayError(
-            "OpenRouter request failed",
-            502,
-            {"upstream_status": exc.code, "upstream": upstream},
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise GatewayError("Could not reach OpenRouter", 502) from exc
-    except json.JSONDecodeError as exc:
-        raise GatewayError("OpenRouter returned invalid JSON", 502) from exc
+    return provider_json('openrouter', path, OPENROUTER_BASE_URL + path,
+                         method, headers, payload, timeout, paid=method == 'POST')
 
 
 def get_models(force: bool = False) -> list[dict[str, Any]]:
@@ -497,6 +513,13 @@ def build_messages(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def run_model(data: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(data) - PARAMETERS - {'model', 'prompt', 'task', 'system', 'messages', 'provider', 'timeout_seconds'}
+    if unknown:
+        raise GatewayError('Gateway cannot execute parameters: ' + ', '.join(sorted(unknown)), code='unsupported_parameter')
+    try:
+        validate_parameters({k: v for k, v in data.items() if k in PARAMETERS}, maximum=MAX_OUTPUT_TOKENS)
+    except ValueError as exc:
+        raise GatewayError(str(exc), code='unsupported_parameter') from exc
     requested = data.get("model")
     if not isinstance(requested, str):
         raise GatewayError("model must be a string")
@@ -515,11 +538,15 @@ def run_model(data: dict[str, Any]) -> dict[str, Any]:
         payload["top_p"] = bounded_float(data["top_p"], "top_p", 0, 1)
     if data.get("reasoning_effort") is not None:
         effort = data["reasoning_effort"]
-        if effort not in {"low", "medium", "high", "xhigh"}:
-            raise GatewayError("reasoning_effort must be low, medium, high, or xhigh")
+        if effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise GatewayError("reasoning_effort must be low, medium, high, xhigh, or max")
         payload["reasoning"] = {"effort": effort}
 
-    response = openrouter_request("POST", "/chat/completions", payload)
+    if isinstance(data.get('provider'), dict):
+        payload['provider'] = data['provider']
+
+    timeout = bounded_int(data.get("timeout_seconds"), "timeout_seconds", 180, 1, 3600)
+    response = openrouter_request("POST", "/chat/completions", payload, timeout=timeout)
     choices = response.get("choices") or []
     message = choices[0].get("message", {}) if choices else {}
     return {
@@ -531,6 +558,97 @@ def run_model(data: dict[str, Any]) -> dict[str, Any]:
         "finish_reason": choices[0].get("finish_reason") if choices else None,
         "generation_id": response.get("id"),
     }
+
+
+TASK_REQUEST_FIELDS = {'model', 'prompt', 'system', 'max_tokens', 'reasoning_effort',
+                       'include_global_context', 'global_context_scope', 'temperature', 'top_p'}
+
+
+def task_request(data):
+    if data.get('provider') not in (None, 'openrouter') or any(k in data for k in ('tools', 'messages')):
+        raise GatewayError('V2 workers accept bounded OpenRouter text tasks only', 400, code='unsupported_worker')
+    unknown = set(data) - TASK_REQUEST_FIELDS - {'version', 'idempotency_key', 'provider', 'reservation_cost_usd', 'reservation_tokens'}
+    if unknown:
+        raise GatewayError('Unsupported task parameters: ' + ', '.join(sorted(unknown)), 400, code='unsupported_parameter')
+    return {key: value for key, value in data.items() if key in TASK_REQUEST_FIELDS}
+
+
+def validate_task_request(task_id, data):
+    """Normalize public inputs; no reservations or task mutation on enqueue."""
+    request = task_request(data)
+    preview = project_store().preview_task_execution(task_id, request)
+    request['model'] = resolve_model(preview['model'])
+    model = next((m for m in get_models() if m.get('id') == request['model']), None)
+    if model is None:
+        raise GatewayError('Selected model is absent from the live catalog', 400, code='model_unavailable')
+    for parameter in ('temperature', 'top_p'):
+        if parameter in preview and parameter not in model.get('supported_parameters', []):
+            raise GatewayError('Selected model does not expose ' + parameter, 400, code='unsupported_parameter')
+    effort = preview.get('reasoning_effort')
+    if effort is not None:
+        reasoning = model.get('reasoning') or {}
+        if 'supported_efforts' not in reasoning or (reasoning['supported_efforts'] is not None and effort not in reasoning['supported_efforts']):
+            raise GatewayError('Selected model does not expose this reasoning effort', 400, code='unsupported_effort')
+    return request
+
+
+def execute_project_task(task_id, data, key, version):
+    try:
+        store = project_store()
+        public = task_request(data)
+        replay = store.replay_task_execution(task_id, public, key)
+        if replay:
+            return replay
+        normalized = validate_task_request(task_id, public)
+        preview = store.preview_task_execution(task_id, normalized)
+        model = next(m for m in get_models() if m.get('id') == normalized['model'])
+        try:
+            quote = quote_text_request(model, build_messages(preview), preview['max_tokens'])
+        except ValueError as exc:
+            raise GatewayError(str(exc), 400, code='budget_quote_unavailable') from exc
+    except Exception as exc:
+        exc.dispatch_started = False
+        raise
+    try:
+        with provider_runtime().admission():
+            return _execute_reserved_task(store, task_id, normalized, public, quote, key, version)
+    except CapacityError as exc:
+        raise GatewayError(str(exc), 429, code='concurrency_limit', retryable=True) from exc
+
+
+def _execute_reserved_task(store, task_id, normalized, public, quote, key, version):
+    prepared = store.prepare_task_execution(task_id,
+        {**normalized, 'reservation_cost_usd': quote['reservation_cost_usd'],
+         'reservation_tokens': quote['reservation_tokens']}, key, version,
+        request_fingerprint_data=public, reservation_priced=True)
+    if prepared.get('duplicate'):
+        return prepared
+    started = time.monotonic()
+    token = execution_context.set({**execution_context.get(), 'project_id': prepared['project_id'], 'execution_id': prepared['execution_id'], 'deadline_at': prepared['deadline_at']})
+    try:
+        # Cancellation after the atomic claim is fenced again before dispatch.
+        current = store.get_task(task_id)
+        project = store.get_project(prepared['project_id'])
+        if current['status'] != 'running' or project['status'] != 'running':
+            raise GatewayError('Execution stopped before provider dispatch', 409, code='dispatch_cancelled')
+        deadline = datetime.fromisoformat(prepared['deadline_at'].replace('Z', '+00:00'))
+        remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            raise GatewayError('Deadline elapsed before provider dispatch', 409, code='dispatch_cancelled')
+        execution_inputs = {k: v for k, v in prepared.items() if k in PARAMETERS | {'model', 'prompt', 'system'}}
+        result = run_model({**execution_inputs, 'timeout_seconds': max(1, min(prepared['timeout_seconds'], int(remaining))),
+                            'provider': quote['provider']})
+    except Exception as exc:
+        safe_before_dispatch = isinstance(exc, GatewayError) and exc.code in {'dispatch_cancelled', 'concurrency_limit'}
+        store.complete_task_execution(prepared['execution_id'], None,
+            error={'message': str(exc), 'billing_status': 'not_charged' if safe_before_dispatch else 'unknown'},
+            latency_ms=int((time.monotonic()-started)*1000))
+        raise
+    finally:
+        execution_context.reset(token)
+    task = store.complete_task_execution(prepared['execution_id'], result,
+                                        latency_ms=int((time.monotonic()-started)*1000))
+    return {'execution_id': prepared['execution_id'], 'task': task, 'result': result}
 
 
 def compare_models(data: dict[str, Any]) -> dict[str, Any]:
@@ -813,7 +931,7 @@ def route_task(data: dict[str, Any]) -> dict[str, Any]:
         # A low-confidence guess is a question for the user, not a route.
         return result
     try:
-        result["selection"] = select_benchmark_model(category)
+        result["selection"] = select_benchmark_model(category, catalog=get_models(), requirements=data.get("requirements"))
     except BenchmarkRegistryError as exc:
         result["selection_error"] = {
             "error": str(exc),
@@ -833,6 +951,9 @@ def public_model(item: dict[str, Any]) -> dict[str, Any]:
             "context_length",
             "pricing",
             "supported_parameters",
+            "architecture",
+            "reasoning",
+            "top_provider",
         )
     }
 
@@ -840,8 +961,27 @@ def public_model(item: dict[str, Any]) -> dict[str, Any]:
 def safe_benchmark_status() -> dict[str, Any]:
     try:
         return registry_status()
-    except BenchmarkRegistryError:
+    except (BenchmarkRegistryError, OSError, ValueError):
         return {"status": "error"}
+
+
+def health_status() -> dict[str, Any]:
+    # Liveness has no database dependency; readiness exposes component state.
+    try:
+        with project_store()._connect() as db:
+            db.execute('SELECT 1 FROM projects LIMIT 1').fetchone()
+        memory = {'status': 'ok'}
+    except Exception as exc:
+        memory = {'status': 'error', 'error_type': type(exc).__name__}
+    benchmark = safe_benchmark_status()
+    return {'ok': True, 'ready': memory['status'] == 'ok' and benchmark['status'] != 'error',
+            'service': 'helios-llm-orchestrator', 'version': VERSION,
+            'configured': api_key_configured(), 'loopback_only': True,
+            'durable_project_memory': memory['status'] == 'ok',
+            'components': {'memory': memory, 'benchmarks': benchmark},
+            'providers': {'openrouter': {'configured': api_key_configured()},
+                          'manus': {'configured': manus_api_key_configured(), 'api_version': 'v2'}},
+            'benchmarks': benchmark}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -979,11 +1119,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, store.list_events(project_id, limit))
             elif collection == "usage":
                 self.send_json(200, store.usage(project_id))
+            elif collection == "jobs":
+                self.send_json(200, task_queue().list_jobs(project_id))
             else:
                 return False
             return True
         if len(parts) == 3 and parts[:2] == ["v2", "tasks"]:
             self.send_json(200, store.get_task(parts[2]))
+            return True
+        if len(parts) == 3 and parts[:2] == ['v2', 'jobs']:
+            self.send_json(200, task_queue().get_job(parts[2]))
+            return True
+        if len(parts) == 3 and parts[:2] == ['v2', 'executions']:
+            self.send_json(200, store.get_execution(parts[2]))
             return True
         return False
 
@@ -997,6 +1145,9 @@ class Handler(BaseHTTPRequestHandler):
         store = project_store()
         key = self._idempotency_key(data)
         version = self._expected_version(data)
+        if len(parts) == 4 and parts[:2] == ['v2', 'executions'] and parts[3] == 'reconcile':
+            self.send_json(200, store.reconcile_execution(parts[2], data, key, version))
+            return True, False
         if parts == ["v2", "global-context"]:
             self.send_json(
                 200, store.update_global_context(data, key, version)
@@ -1025,60 +1176,11 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 4 and parts[:2] == ["v2", "tasks"]:
             task_id, action = parts[2], parts[3]
             if action == "run":
-                acquired = _paid_slots.acquire(blocking=False)
-                if not acquired:
-                    raise GatewayError(
-                        "Helios is busy; retry later",
-                        429,
-                        code="concurrency_limit",
-                        retryable=True,
-                    )
-                try:
-                    prepared = store.prepare_task_execution(
-                        task_id, data, key, version
-                    )
-                    if prepared.get("duplicate"):
-                        self.send_json(200, prepared)
-                        return True, False
-                    started = time.monotonic()
-                    try:
-                        result = run_model(
-                            {
-                                "model": prepared["model"],
-                                "prompt": prepared["prompt"],
-                                "system": prepared["system"],
-                                "max_tokens": prepared["max_tokens"],
-                                **(
-                                    {"reasoning_effort": data["reasoning_effort"]}
-                                    if data.get("reasoning_effort") is not None
-                                    else {}
-                                ),
-                            }
-                        )
-                    except Exception as exc:
-                        latency_ms = int((time.monotonic() - started) * 1000)
-                        store.complete_task_execution(
-                            prepared["execution_id"],
-                            None,
-                            error=str(exc),
-                            latency_ms=latency_ms,
-                        )
-                        raise
-                    latency_ms = int((time.monotonic() - started) * 1000)
-                    task = store.complete_task_execution(
-                        prepared["execution_id"], result, latency_ms=latency_ms
-                    )
-                    self.send_json(
-                        200,
-                        {
-                            "execution_id": prepared["execution_id"],
-                            "task": task,
-                            "result": result,
-                        },
-                    )
-                    return True, False
-                finally:
-                    _paid_slots.release()
+                self.send_json(200, execute_project_task(task_id, data, key, version))
+                return True, False
+            if action == 'enqueue':
+                self.send_json(202, task_queue().enqueue(task_id, task_request(data), key, version))
+                return True, False
             if action == "verify":
                 self.send_json(
                     200, store.verify_task(task_id, data, key, version)
@@ -1125,27 +1227,11 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path != "/health" and not local_request_authorized(self.headers):
                 self.send_json(401, {"error": "Unauthorized"})
                 return
-            if parsed.path == "/health":
-                project_store()
-                self.send_json(
-                    200,
-                    {
-                        "ok": True,
-                        "service": "helios-llm-orchestrator",
-                        "version": VERSION,
-                        "configured": api_key_configured(),
-                        "loopback_only": True,
-                        "durable_project_memory": True,
-                        "providers": {
-                            "openrouter": {"configured": api_key_configured()},
-                            "manus": {
-                                "configured": manus_api_key_configured(),
-                                "api_version": "v2",
-                            },
-                        },
-                        "benchmarks": safe_benchmark_status(),
-                    },
-                )
+            if parsed.path in {"/health", "/ready"}:
+                health = health_status()
+                self.send_json(200 if parsed.path == '/health' or health['ready'] else 503, health)
+            elif parsed.path == '/usage':
+                self.send_json(200, provider_runtime().usage())
             elif parsed.path == "/providers":
                 self.send_json(
                     200,
@@ -1171,7 +1257,11 @@ class Handler(BaseHTTPRequestHandler):
                 category = str((query.get("category") or [""])[0]).strip()
                 if not category:
                     raise BenchmarkRegistryError("category is required")
-                self.send_json(200, select_benchmark_model(category))
+                try:
+                    requirements = json.loads((query.get('requirements') or ['{}'])[0])
+                except (ValueError, TypeError):
+                    raise GatewayError('requirements must be a JSON object') from None
+                self.send_json(200, select_benchmark_model(category, catalog=get_models(), requirements=requirements))
             elif parsed.path == "/models":
                 query = urllib.parse.parse_qs(parsed.query)
                 search = str((query.get("search") or [""])[0]).lower().strip()
@@ -1194,7 +1284,6 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_error(exc)
 
     def do_POST(self) -> None:
-        acquired = False
         try:
             parsed = urllib.parse.urlparse(self.path)
             if not loopback_host_header(self.headers.get("Host")):
@@ -1206,17 +1295,6 @@ class Handler(BaseHTTPRequestHandler):
             handled, _paid = self._handle_v2_post(parsed.path, data)
             if handled:
                 return
-            if parsed.path in {
-                "/run",
-                "/compare",
-                "/decide",
-                "/route",
-                "/benchmarks/refresh",
-                "/manus/tasks",
-            }:
-                acquired = _paid_slots.acquire(blocking=False)
-                if not acquired:
-                    raise GatewayError("Helios is busy; retry later", 429)
             if parsed.path == "/run":
                 self.send_json(200, run_provider(data))
             elif parsed.path == "/manus/tasks":
@@ -1255,9 +1333,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": "Not found"})
         except Exception as exc:
             self._handle_error(exc)
-        finally:
-            if acquired:
-                _paid_slots.release()
 
 
 class LoopbackHTTPServer(ThreadingHTTPServer):
@@ -1277,6 +1352,8 @@ def display_url(host: str, port: int) -> str:
 
 def main() -> None:
     httpd = LoopbackHTTPServer((HOST, PORT), Handler)
+    queue = task_queue()
+    queue.start(workers=MAX_CONCURRENT_REQUESTS)
     print(
         json.dumps(
             {
@@ -1289,7 +1366,11 @@ def main() -> None:
         ),
         flush=True,
     )
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        queue.stop(timeout=5)
+        httpd.server_close()
 
 
 if __name__ == "__main__":

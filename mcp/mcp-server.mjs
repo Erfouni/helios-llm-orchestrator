@@ -19,14 +19,15 @@ if (
 const gatewayBase = gatewayUrl.href.replace(/\/$/, "");
 
 async function localJson(path, options = {}) {
+  const { timeoutMs = 240_000, ...requestOptions } = options;
   const response = await fetch(gatewayBase + path, {
-    ...options,
+    ...requestOptions,
     headers: {
       "Content-Type": "application/json",
       ...(LOCAL_API_KEY ? { Authorization: `Bearer ${LOCAL_API_KEY}` } : {}),
       ...(options.headers ?? {}),
     },
-    signal: AbortSignal.timeout(240_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await response.text();
   let value;
@@ -109,7 +110,7 @@ server.registerTool(
       model: z.string().min(1),
       prompt: z.string().min(1),
       system: z.string().optional(),
-      reasoning_effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+      reasoning_effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
       max_tokens: z
         .number()
         .int()
@@ -158,7 +159,7 @@ server.registerTool(
       models: z.array(z.string().min(1)).min(2).max(4),
       prompt: z.string().min(1),
       system: z.string().optional(),
-      reasoning_effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+      reasoning_effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
       max_tokens: z
         .number()
         .int()
@@ -528,6 +529,48 @@ server.registerTool(
 );
 
 server.registerTool(
+  "helios_get_execution",
+  {
+    title: "Inspect durable execution and billing status",
+    description: "Read execution provenance, lease, reservation and billing state before a retry or reconciliation.",
+    inputSchema: { execution_id: z.string().uuid() },
+    outputSchema: z.looseObject({}),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  async ({ execution_id }) => {
+    try { return result(await localJson(`/v2/executions/${encodeURIComponent(execution_id)}`)); }
+    catch (error) { return errorResult(error); }
+  },
+);
+
+server.registerTool(
+  "helios_reconcile_execution",
+  {
+    title: "Reconcile an uncertain execution bill",
+    description: "Record independently checked final billing evidence and release an uncertain reservation. Never guess usage or re-authorize an unpaid retry without approval.",
+    inputSchema: {
+      execution_id: z.string().uuid(),
+      idempotency_key: z.string().min(1).max(200),
+      version: z.number().int().min(1).optional(),
+      billing_evidence: z.object({ source: z.string().min(1), reference: z.string().min(1), details: z.string().min(1) }),
+      cost_usd: z.number().nonnegative().optional(),
+      tokens: z.number().int().nonnegative().optional(),
+      confirmed_not_charged: z.boolean().optional(),
+      retry_authorized: z.boolean().optional(),
+    },
+    outputSchema: z.looseObject({}),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  async ({ execution_id, idempotency_key, ...body }) => {
+    try {
+      return result(await localJson(`/v2/executions/${encodeURIComponent(execution_id)}/reconcile`, {
+        method: 'POST', headers: {'Idempotency-Key': idempotency_key}, body: JSON.stringify(body),
+      }));
+    } catch (error) { return errorResult(error); }
+  },
+);
+
+server.registerTool(
   "helios_run_task",
   {
     title: "Run a ready durable Helios task",
@@ -537,11 +580,16 @@ server.registerTool(
       task_id: z.string().uuid(),
       version: z.number().int().min(1),
       idempotency_key: z.string().min(1).max(200),
+      enqueue: z.boolean().optional().default(false),
+      include_global_context: z.boolean().optional(),
+      global_context_scope: z.string().optional(),
       model: z.string().min(1).optional(),
       prompt: z.string().min(1).optional(),
       system: z.string().optional(),
-      reasoning_effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
-      max_tokens: z.number().int().min(1).max(8192).optional().default(4096),
+      temperature: z.number().min(0).max(2).optional(),
+      top_p: z.number().min(0).max(1).optional(),
+      reasoning_effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
+      max_tokens: z.number().int().min(1).max(200000).optional().default(4096),
     },
     outputSchema: z.looseObject({}),
     annotations: {
@@ -551,11 +599,12 @@ server.registerTool(
       openWorldHint: true,
     },
   },
-  async ({ task_id, version, idempotency_key, ...body }) => {
+  async ({ task_id, version, idempotency_key, enqueue, ...body }) => {
     try {
       return result(
-        await localJson(`/v2/tasks/${encodeURIComponent(task_id)}/run`, {
+        await localJson(`/v2/tasks/${encodeURIComponent(task_id)}/${enqueue ? "enqueue" : "run"}`, {
           method: "POST",
+          timeoutMs: enqueue ? 30_000 : 3_630_000,
           headers: {
             "Idempotency-Key": idempotency_key,
             "If-Match": String(version),
@@ -583,7 +632,7 @@ server.registerTool(
       decision: z
         .enum(["pass", "revision_required", "blocked", "human_review_required"])
         .optional(),
-      evidence: z.array(z.unknown()).optional(),
+      evidence: z.record(z.string(), z.unknown()).optional(),
       rationale: z.string().optional(),
       reason: z.string().optional(),
     },
@@ -646,18 +695,24 @@ server.registerTool(
     title: "Select a benchmark-guided specialist",
     description:
       "Select the highest-ranked cited model that passes current registry quality gates and is available on OpenRouter. Does not run private tests.",
-    inputSchema: { category: z.string().min(1) },
+    inputSchema: {
+      category: z.string().min(1),
+      requirements: z.record(z.string(), z.unknown()).optional()
+        .describe("Required modalities, context, token/cost bounds and executable requested_parameters."),
+    },
     // A loose object, not z.record(): the SDK needs an object schema or a raw
     // shape here, and a bare record normalizes to undefined, which makes every
     // successful call throw. These three payloads vary in shape by request.
     outputSchema: z.looseObject({}),
     annotations: { readOnlyHint: true },
   },
-  async ({ category }) => {
+  async ({ category, requirements }) => {
     try {
+      const query = new URLSearchParams({ category });
+      if (requirements !== undefined) query.set("requirements", JSON.stringify(requirements));
       return result(
         await localJson(
-          "/benchmarks/select?" + new URLSearchParams({ category }).toString(),
+          "/benchmarks/select?" + query.toString(),
         ),
       );
     } catch (error) {
@@ -674,6 +729,8 @@ server.registerTool(
       "Send one task's description to the Jev decision model, which picks its benchmark category, then return that category's benchmark-guided specialist. Costs a fraction of a cent. When needs_confirmation is true, ask the user to confirm the category.",
     inputSchema: {
       task: z.string().min(1),
+      requirements: z.record(z.string(), z.unknown()).optional()
+        .describe("Requirements passed to benchmark selection after category routing."),
       min_confidence: z
         .number()
         .min(0)

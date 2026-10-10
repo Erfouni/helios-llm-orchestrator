@@ -10,7 +10,7 @@ from agent import benchmark_registry
 SOURCE = "https://official.example/leaderboard"
 
 
-def search_response(ranking, benchmark_date=None):
+def search_response(ranking, benchmark_date="2026-07-20"):
     """A stand-in for OpenRouter's web-search reply with one citation."""
     extracted = {"benchmark_name": "Official", "ranking": ranking}
     if benchmark_date is not None:
@@ -39,7 +39,8 @@ def current_entry():
     return {
         "selected_model": {"id": "provider/model-1"},
         "valid_until": "2099-01-01T00:00:00Z",
-        "ranking": [{"model_name": f"Model {n}", "source_url": SOURCE} for n in range(1, 4)],
+        "benchmark_date": "2026-07-20",
+        "ranking": ranked("Model 1", "Model 2", "Model 3"),
     }
 
 
@@ -80,9 +81,9 @@ class BenchmarkRegistryTests(unittest.TestCase):
                                 "selection_policy": "highest_cited_public_rank_available_on_openrouter",
                                 "valid_until": "2099-07-30T00:00:00Z",
                                 "ranking": [
-                                    {"model_name": "Model A", "source_url": "https://www.swebench.com/"},
-                                    {"model_name": "Model B", "source_url": "https://www.swebench.com/"},
-                                    {"model_name": "Model C", "source_url": "https://www.swebench.com/"},
+                                    {"model_name": "Model A", "score": 80, "source_url": "https://www.swebench.com/", "openrouter_model": {"id": "provider/model"}},
+                                    {"model_name": "Model B", "score": 79, "source_url": "https://www.swebench.com/"},
+                                    {"model_name": "Model C", "score": 78, "source_url": "https://www.swebench.com/"},
                                 ],
                             }
                         },
@@ -212,7 +213,7 @@ class BenchmarkRegistryTests(unittest.TestCase):
         ]
         result = benchmark_registry._refresh_category(
             "coding",
-            {"query": "coding", "benchmark_hints": []},
+            {"query": "coding", "allowed_domains": ["official.example"], "benchmark_hints": []},
             {"min_ranked_models": 3, "valid_days": 8},
             request,
             models,
@@ -235,8 +236,8 @@ class BenchmarkRegistryTests(unittest.TestCase):
                         "valid_days": 8,
                         "max_parallel": 2,
                         "categories": {
-                            "coding": {"query": "coding"},
-                            "frontend": {"query": "frontend"},
+                            "coding": {"query": "coding", "allowed_domains": ["official.example"]},
+                            "frontend": {"query": "frontend", "allowed_domains": ["official.example"]},
                         },
                     }
                 ),
@@ -276,6 +277,7 @@ class BenchmarkRegistryTests(unittest.TestCase):
                                 "content": json.dumps(
                                     {
                                         "benchmark_name": "Official",
+                                        "benchmark_date": "2026-07-20",
                                         "ranking": ranking,
                                     }
                                 ),
@@ -498,7 +500,7 @@ class BenchmarkRegistryTests(unittest.TestCase):
         models = [{"id": f"provider/model-{n}", "name": f"Model {n}", "created": n} for n in range(1, 4)]
         result = benchmark_registry._refresh_category(
             "coding",
-            {"query": "coding"},
+            {"query": "coding", "allowed_domains": ["official.example"]},
             {"min_ranked_models": 3},
             lambda *_a, **_k: search_response(ranking),
             models,
@@ -514,7 +516,7 @@ class BenchmarkRegistryTests(unittest.TestCase):
         def refresh(benchmark_date):
             return benchmark_registry._refresh_category(
                 "reasoning",
-                {"query": "reasoning"},
+                {"query": "reasoning", "allowed_domains": ["official.example"]},
                 config,
                 lambda *_a, **_k: search_response(ranking, benchmark_date),
                 models,
@@ -525,9 +527,12 @@ class BenchmarkRegistryTests(unittest.TestCase):
             refresh("2024-01-15")
         self.assertEqual(error.exception.status, 422)
         self.assertEqual(error.exception.details["benchmark_date"], "2024-01-15")
-        # Recent, month-only, and unknown dates are accepted.
-        for benchmark_date in ("2026-07-01", "2026-06", None):
+        # Recent and month-only dates are accepted; undated/future evidence is rejected.
+        for benchmark_date in ("2026-07-01", "2026-06"):
             self.assertEqual(refresh(benchmark_date)["selected_model"]["id"], "provider/model-1")
+        for benchmark_date in (None, "2026-07-23"):
+            with self.assertRaises(benchmark_registry.BenchmarkRegistryError):
+                refresh(benchmark_date)
 
 
 class RegistryRefreshTests(unittest.TestCase):
@@ -567,7 +572,7 @@ class RegistryRefreshTests(unittest.TestCase):
         )
 
     def test_removed_category_neither_stays_stale_nor_survives_a_refresh(self):
-        self.write(self.config_path, {"categories": {"coding": {"query": "coding"}}})
+        self.write(self.config_path, {"categories": {"coding": {"query": "coding", "allowed_domains": ["official.example"]}}})
         retired = dict(current_entry(), valid_until="2020-01-01T00:00:00Z")
         self.write(
             self.registry_path,
@@ -591,10 +596,10 @@ class RegistryRefreshTests(unittest.TestCase):
             self.config_path,
             {
                 "categories": {
-                    "coding": {"query": "coding"},
-                    "frontend": {"query": "frontend"},
-                    "mathematics": {"query": "mathematics"},
-                    "vision": {"query": "vision", "enabled": False},
+                    "coding": {"query": "coding", "allowed_domains": ["official.example"]},
+                    "frontend": {"query": "frontend", "allowed_domains": ["official.example"]},
+                    "mathematics": {"query": "mathematics", "allowed_domains": ["official.example"]},
+                    "vision": {"query": "vision", "allowed_domains": ["official.example"], "enabled": False},
                 }
             },
         )
@@ -619,7 +624,7 @@ class RegistryRefreshTests(unittest.TestCase):
         # Evidence lasts 8 days and the refresh runs every 7: without looking
         # ahead, each weekly run skipped categories valid for one more day, and
         # they stayed stale for the next 6.
-        self.write(self.config_path, {"categories": {"coding": {"query": "coding"}, "frontend": {"query": "frontend"}}})
+        self.write(self.config_path, {"categories": {"coding": {"query": "coding", "allowed_domains": ["official.example"]}, "frontend": {"query": "frontend", "allowed_domains": ["official.example"]}}})
         tomorrow = benchmark_registry.isoformat(benchmark_registry.utc_now() + benchmark_registry.timedelta(days=1))
         self.write(
             self.registry_path,
@@ -632,7 +637,7 @@ class RegistryRefreshTests(unittest.TestCase):
         self.assertEqual(refreshed["refreshed_categories"], ["frontend"])
 
     def test_refresh_is_refused_while_another_process_holds_the_lock(self):
-        self.write(self.config_path, {"categories": {"coding": {"query": "coding"}}})
+        self.write(self.config_path, {"categories": {"coding": {"query": "coding", "allowed_domains": ["official.example"]}}})
         lock_path = self.registry_path.with_name(self.registry_path.name + ".lock")
         descriptor = os.open(str(lock_path), os.O_RDWR | os.O_CREAT)
         try:
