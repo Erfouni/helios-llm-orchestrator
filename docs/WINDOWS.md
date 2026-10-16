@@ -19,6 +19,17 @@ npm --version
 git --version
 ```
 
+## Try it without installing
+
+Nothing starts at login and the key lives only in this PowerShell session:
+
+```powershell
+$env:OPENROUTER_API_KEY = [Net.NetworkCredential]::new('', (Read-Host 'OpenRouter API key' -AsSecureString)).Password
+py -3 agent\server.py
+```
+
+From a second window, `Invoke-RestMethod http://127.0.0.1:3188/health` should report `"configured": true`.
+
 ## Install
 
 ```powershell
