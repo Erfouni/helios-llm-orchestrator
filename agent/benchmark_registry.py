@@ -1279,7 +1279,8 @@ def _selection_requirements(requirements: dict[str, Any] | None) -> dict[str, An
     parameters = value.setdefault("requested_parameters", {})
     if not isinstance(parameters, (dict, list)) or any(not isinstance(key, str) for key in parameters):
         raise BenchmarkRegistryError("requested_parameters must be a list of names or an object")
-    if "reasoning_effort" in value and value["reasoning_effort"] not in _GATEWAY_REASONING_EFFORTS:
+    if "reasoning_effort" in value and (not isinstance(value["reasoning_effort"], str)
+                                        or value["reasoning_effort"] not in _GATEWAY_REASONING_EFFORTS):
         raise BenchmarkRegistryError("reasoning_effort is not a supported gateway effort")
     return value
 

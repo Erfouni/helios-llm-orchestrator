@@ -95,6 +95,14 @@ class BenchmarkRegistryTests(unittest.TestCase):
             self.assertEqual(selected["category"], "coding")
             self.assertEqual(selected["model"]["id"], "provider/model")
 
+    def test_structured_reasoning_effort_is_a_400_not_a_crash(self):
+        # A JSON list or object is unhashable; it must be refused like any other bad effort.
+        for effort in (["high"], {"effort": "high"}):
+            with self.subTest(effort=effort):
+                with self.assertRaises(benchmark_registry.BenchmarkRegistryError) as error:
+                    benchmark_registry._selection_requirements({"reasoning_effort": effort})
+                self.assertEqual(error.exception.status, 400)
+
     def test_category_expiry_cannot_be_hidden_by_registry_expiry(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "registry.json"
