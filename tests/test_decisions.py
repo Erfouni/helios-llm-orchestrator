@@ -1,9 +1,14 @@
 """Jev decisions (/decide) and Jev task routing (/route), with no paid calls."""
 
 import importlib.util
+import json
+from functools import partial
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
+
+from agent import benchmark_registry
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "agent" / "server.py"
 SPEC = importlib.util.spec_from_file_location("helios_decision_server", MODULE_PATH)
@@ -17,6 +22,30 @@ CONFIG = {
         "frontend": {"description": "Building interfaces"},
         "vision": {"query": "image benchmark", "enabled": False},
     }
+}
+
+SOURCE = "https://www.swebench.com/"
+CODING_REGISTRY = {
+    "registry_hash": "abc",
+    "updated_at": "2026-07-22T00:00:00Z",
+    "valid_until": "2099-07-30T00:00:00Z",
+    "categories": {
+        "coding": {
+            "selected_model": {"id": "provider/model", "name": "Model"},
+            "benchmark_name": "SWE-bench Verified",
+            "benchmark_date": "2026-07-20",
+            "selected_score": 80.0,
+            "selected_score_text": "80.0%",
+            "selection_source_url": SOURCE,
+            "selection_policy": "highest_cited_public_rank_available_on_openrouter",
+            "valid_until": "2099-07-30T00:00:00Z",
+            "ranking": [
+                {"model_name": "Model A", "score": 80, "source_url": SOURCE, "openrouter_model": {"id": "provider/model"}},
+                {"model_name": "Model B", "score": 79, "source_url": SOURCE},
+                {"model_name": "Model C", "score": 78, "source_url": SOURCE},
+            ],
+        }
+    },
 }
 
 
@@ -150,6 +179,27 @@ class RouteTaskTests(unittest.TestCase):
             result = server.route_task({"task": "Fix the login API"})
         self.assertIsNone(result["selection"])
         self.assertEqual(result["selection_error"]["status"], 503)
+
+    def test_structured_reasoning_effort_keeps_the_router_decision(self):
+        # Requirements are checked after the paid router call. A list or object
+        # effort must come back as selection_error 400, not a 500 that drops it.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "registry.json"
+            path.write_text(json.dumps(CODING_REGISTRY), encoding="utf-8")
+            with mock.patch.object(server, "load_config", return_value=CONFIG), mock.patch.object(
+                server, "openrouter_request", return_value=jev_reply({"category": {"choice": "coding", "confidence": 0.9}})
+            ) as request, mock.patch.object(
+                server, "select_benchmark_model", side_effect=partial(benchmark_registry.select_benchmark_model, path=path)
+            ), mock.patch.object(server, "get_models", return_value=[]):
+                for effort in (["high"], {"effort": "high"}):
+                    with self.subTest(effort=effort):
+                        result = server.route_task(
+                            {"task": "Fix the login API", "requirements": {"reasoning_effort": effort}}
+                        )
+                        self.assertIsNone(result["selection"])
+                        self.assertEqual(result["selection_error"]["status"], 400)
+                        self.assertEqual(result["router"]["generation_id"], "gen-dec-1")
+        self.assertEqual(request.call_count, 2)
 
     def test_task_is_required(self):
         with mock.patch.object(server, "openrouter_request") as request:
