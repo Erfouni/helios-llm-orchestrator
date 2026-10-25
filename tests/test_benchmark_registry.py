@@ -415,6 +415,42 @@ class BenchmarkRegistryTests(unittest.TestCase):
         self.assertEqual(result["selected_score"], 88.0)
         self.assertEqual(result["evidence_method"], "approved_official_csv")
 
+    def test_official_csv_reads_short_rows_and_bom_headers_exactly(self):
+        class Response:
+            def __init__(self, data): self.data = data
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self): return self.data
+        spec = {
+            "source_adapter": "official_csv",
+            "benchmark_name": "BFCL V4",
+            "data_url": "https://official.example/data.csv",
+            "source_url": "https://official.example/leaderboard.html",
+            "rank_column": "Rank",
+            "model_column": "Model",
+            "score_column": "Overall Acc",
+            "date_regex": r"Last Updated:\s*(\d{4}-\d{2}-\d{2})",
+            "allowed_domains": ["official.example"],
+        }
+        models = [{"id": "p/model-one", "name": "Model One", "created": 1}]
+
+        def refresh(csv_text):
+            def fake_urlopen(request, timeout=45):
+                url = request.full_url
+                return Response(csv_text.encode("utf-8") if url.endswith(".csv") else b"<p>Last Updated: 2026-08-23</p>")
+            with mock.patch.object(benchmark_registry.urllib.request, "urlopen", fake_urlopen):
+                return benchmark_registry._refresh_official_csv_category(
+                    "agentic_tool_use", spec, {"min_ranked_models": 3, "valid_days": 8}, models
+                )
+
+        # A byte order mark must not hide the first, model, column of a model-first header.
+        result = refresh("\ufeffModel,Rank,Overall Acc\nModel One,1,88.0%\nModel Two,2,80.0%\nModel Three,3,75.0%\n")
+        self.assertEqual([item["model_name"] for item in result["ranking"]], ["Model One", "Model Two", "Model Three"])
+
+        # A short row has no model: it must be skipped, not ranked as the model "None".
+        result = refresh("Rank,Overall Acc,Model\n1,88.0%,Model One\n2,80.0%,Model Two\n3,75.0%,Model Three\n4,70.0%\n")
+        self.assertEqual([item["model_name"] for item in result["ranking"]], ["Model One", "Model Two", "Model Three"])
+
     def test_resolver_prefers_base_text_model_over_image_or_customtools_variant(self):
         models = [
             {"id":"google/gemini-3-pro-preview","name":"Google: Gemini 3 Pro Preview","created":10},

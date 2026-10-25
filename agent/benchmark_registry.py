@@ -840,14 +840,14 @@ def _refresh_official_csv_category(
     data_url = _approved_source_url(str(spec.get("data_url", "")), allowed_domains)
     source_url = _approved_source_url(str(spec.get("source_url", data_url)), allowed_domains)
     text = _fetch_text(data_url)
-    reader = csv.DictReader(text.splitlines())
+    reader = csv.DictReader(text.removeprefix("\ufeff").splitlines())
     rank_column = str(spec.get("rank_column", "Rank"))
     model_column = str(spec.get("model_column", "Model"))
     score_column = str(spec.get("score_column", "Score"))
     ranking: list[dict[str, Any]] = []
     seen: set[str] = set()
     for position, row in enumerate(reader, start=1):
-        model_name = str(row.get(model_column, "")).strip()
+        model_name = str(row.get(model_column) or "").strip()
         key = _normalize(model_name)
         if not model_name or not key or key in seen:
             continue
@@ -856,7 +856,7 @@ def _refresh_official_csv_category(
             rank = int(str(row.get(rank_column, position)).strip())
         except ValueError:
             rank = position
-        score_text = str(row.get(score_column, "")).strip()
+        score_text = str(row.get(score_column) or "").strip()
         available = resolve_available_model(model_name, models)
         ranking.append(
             {
