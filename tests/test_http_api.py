@@ -85,6 +85,30 @@ class HttpApiTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body["error"], "max_tokens must be an integer")
 
+    def test_invalid_message_role_type_is_400_without_provider_call(self):
+        for role in ([], {}):
+            with self.subTest(role=role):
+                status, body, _headers = self.call(
+                    "/run",
+                    {
+                        "model": "fixture/model",
+                        "messages": [{"role": role, "content": "fixture"}],
+                    },
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(body["error"], "messages[0].role is invalid")
+
+    def test_invalid_decision_question_type_is_400_without_provider_call(self):
+        status, body, _headers = self.call(
+            "/decide",
+            {
+                "state": "fixture",
+                "questions": {"q": {"type": {}, "instructions": "fixture"}},
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"], "questions.q.type must be choice, score, or noul")
+
     def test_refresh_boolean_is_validated_before_provider_call(self):
         status, body, _headers = self.call(
             "/benchmarks/refresh", {"only_if_stale": "false"}
