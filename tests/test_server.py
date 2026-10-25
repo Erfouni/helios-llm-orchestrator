@@ -35,6 +35,33 @@ class HeliosServerTests(unittest.TestCase):
         with self.assertRaises(server.GatewayError):
             server.build_messages({"messages": [{"role": "user", "content": ""}]})
 
+    def test_message_roles_must_be_strings(self):
+        for role in ([], {}, ["user"]):
+            with self.subTest(role=role):
+                with self.assertRaises(server.GatewayError) as error:
+                    server.build_messages(
+                        {"messages": [{"role": role, "content": "hello"}]}
+                    )
+                self.assertEqual(error.exception.status, 400)
+                self.assertEqual(str(error.exception), "messages[0].role is invalid")
+
+    def test_decision_question_types_must_be_strings(self):
+        for question_type in ([], {}, ["choice"]):
+            with self.subTest(question_type=question_type):
+                with self.assertRaises(server.GatewayError) as error:
+                    server.decision_question(
+                        "q", {"type": question_type, "instructions": "pick one"}
+                    )
+                self.assertEqual(error.exception.status, 400)
+                self.assertEqual(
+                    str(error.exception), "questions.q.type must be choice, score, or noul"
+                )
+        # A valid string type still passes.
+        question = server.decision_question(
+            "q", {"type": "noul", "instructions": "rate this"}
+        )
+        self.assertEqual(question["type"], "noul")
+
     def test_messages_size_limit_cannot_be_bypassed(self):
         with mock.patch.object(server, "MAX_PROMPT_CHARS", 20):
             with self.assertRaises(server.GatewayError) as error:

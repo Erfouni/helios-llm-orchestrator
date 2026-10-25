@@ -480,7 +480,10 @@ def build_messages(data: dict[str, Any]) -> list[dict[str, Any]]:
         for index, message in enumerate(provided):
             if not isinstance(message, dict):
                 raise GatewayError(f"messages[{index}] must be an object")
-            if message.get("role") not in ALLOWED_MESSAGE_ROLES:
+            role = message.get("role")
+            # Check the type first: a list or object in a set membership test
+            # raises TypeError and used to surface as a 500.
+            if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
                 raise GatewayError(f"messages[{index}].role is invalid")
             content = message.get("content")
             if not isinstance(content, (str, list)) or content in ("", []):
@@ -806,7 +809,10 @@ ROUTE_INSTRUCTIONS = "Which specialist category best fits the main work this tas
 def decision_question(key: Any, question: Any) -> dict[str, Any]:
     if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_]{1,64}", key):
         raise GatewayError("question names must be 1 to 64 letters, digits, or underscores")
-    if not isinstance(question, dict) or question.get("type") not in DECISION_QUESTION_TYPES:
+    question_type = question.get("type") if isinstance(question, dict) else None
+    # Same reason as message roles: test the type before set membership, or a
+    # list or object raises TypeError and becomes a 500.
+    if not isinstance(question_type, str) or question_type not in DECISION_QUESTION_TYPES:
         raise GatewayError(f"questions.{key}.type must be choice, score, or noul")
     instructions = question.get("instructions")
     if not isinstance(instructions, str) or not instructions.strip():
