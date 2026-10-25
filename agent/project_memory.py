@@ -62,11 +62,13 @@ SAFE_TOKEN_KEYS = {
     "completion_tokens",
     "total_tokens",
     "tokens",
+    "input_tokens",
+    "output_tokens",
     "reservation_tokens",
     "reserved_tokens",
 }
 SENSITIVE_VALUE_RE = re.compile(
-    r"(?i)(bearer\s+[A-Za-z0-9._~+/=-]{12,}|(?:sk|sess|token)[-_][A-Za-z0-9._-]{12,})"
+    r"(?i)(bearer\s+[A-Za-z0-9._~+/=-]{12,}|(?:(?<![A-Za-z0-9])(?:sk|sess)|token)[-_][A-Za-z0-9._-]{12,})"
 )
 
 

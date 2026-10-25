@@ -228,6 +228,28 @@ class ProjectMemoryTests(unittest.TestCase):
         self.assertEqual(value["api_key"], "[REDACTED]")
         self.assertEqual(value["cookie"], "[REDACTED]")
 
+    def test_redact_keeps_model_usage_counts_and_ordinary_words(self):
+        value = redact(
+            {
+                "input_tokens": 275,
+                "output_tokens": 20,
+                "note": "task_queue_module and desk_layout_manager_v2",
+            }
+        )
+        self.assertEqual(value["input_tokens"], 275)
+        self.assertEqual(value["output_tokens"], 20)
+        self.assertEqual(value["note"], "task_queue_module and desk_layout_manager_v2")
+
+    def test_redact_still_removes_credentials_next_to_similar_words(self):
+        value = redact(
+            {
+                "access_tokens": ["abc123456789xyz"],
+                "note": "key sk-proj-abcdefgh1234, OPENAI_API_KEY=sk-or-v1-abcdefgh1234, authtoken-abcdefghijklmnop",
+            }
+        )
+        self.assertEqual(value["access_tokens"], "[REDACTED]")
+        self.assertEqual(value["note"], "key [REDACTED], OPENAI_API_KEY=[REDACTED], auth[REDACTED]")
+
     def test_global_context_is_versioned_redacted_and_durable(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "helios.db"
